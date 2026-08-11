@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CodeLens AI
 
 **Adaptive Context Optimization for Repository-Scale AI Code Understanding**
@@ -192,3 +193,7 @@ from, but the short version, roughly in the order you'll hit it:
 
 Add your team's chosen license here before making the repository public
 (MIT and Apache-2.0 are the common defaults for academic project code).
+=======
+# CodeLens
+A project focused on adaptive context optimization for understanding code across entire repositories
+>>>>>>> 56a8aab805a922e23164d25c4849c050fb64d369
