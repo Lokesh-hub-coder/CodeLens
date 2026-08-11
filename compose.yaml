@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - REPO_STORAGE_DIR=/data/repos
+      - INDEX_STORAGE_DIR=/data/index
+      - JAVA_PARSER_JAR_PATH=/parser-service/parser-service-1.0.0.jar
+      - VECTOR_DB_BACKEND=${VECTOR_DB_BACKEND:-faiss}
+      - CHROMA_PERSIST_DIR=/data/chroma
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CORS_ALLOW_ORIGINS=http://localhost:5173
+    volumes:
+      - ./data:/data
+      # Built separately (`cd parser-service && mvn -q package`) and mounted
+      # in read-only, rather than built inside this image -- see
+      # backend/Dockerfile's comment on why the Python and Java build
+      # toolchains stay decoupled.
+      - ./parser-service/target:/parser-service:ro
+    env_file:
+      - .env
+
+  frontend:
+    image: node:22-slim
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend
