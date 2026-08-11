@@ -24,16 +24,23 @@ public final class CodeEntities {
         public String id;            // fully-qualified name, e.g. "com.foo.Bar"
         public String file_path;     // relative to repo root, forward slashes
         public String name;
+
+        // "package" is a reserved word in Java, so the field itself can't
+        // be named that -- but java_bridge.py's ClassInfo dataclass expects
+        // the JSON key "package" exactly. @JsonIgnore hides the field from
+        // Jackson's field-based auto-detection so it does NOT also emit a
+        // redundant "packageName" key; the getter below is then the *only*
+        // source of this property, renamed via @JsonProperty. (Leaving the
+        // field visible here would silently produce both "packageName" and
+        // "package" in the output JSON, which would break the Python
+        // dataclass constructor call with an unexpected-kwarg error.)
+        @com.fasterxml.jackson.annotation.JsonIgnore
         public String packageName;
+
         public int start_line;
         public int end_line;
         public List<String> imports = new ArrayList<>();
 
-        // Jackson serializes the public field `packageName` as
-        // "packageName" by default, but java_bridge.py's ClassInfo expects
-        // the key "package". A dedicated getter avoids fighting Jackson's
-        // reflection-based field naming for one field while keeping every
-        // other field's straightforward field-name mapping.
         @com.fasterxml.jackson.annotation.JsonProperty("package")
         public String getPackage() {
             return packageName;
