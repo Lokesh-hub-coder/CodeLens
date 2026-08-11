@@ -1,0 +1,332 @@
+/*
+  Design notes (why these choices, for whoever touches this next):
+
+  Palette and type are pulled from the subject itself rather than a generic
+  SaaS look: this is a tool developers use *alongside a terminal and an
+  editor* to reason about a token budget and a graph of call/dependency
+  relationships. Ink-dark background + a single teal signature accent
+  (standing in for "graph edge") reads as developer tooling, not a
+  marketing page. JetBrains Mono carries headings, labels, and all code --
+  Inter carries body prose. The one deliberately "designed" moment is the
+  token-budget meter in ContextViewer: it is the project's actual thesis
+  (spend the fewest tokens for the most relevant context) made visible,
+  not a decorative widget bolted on afterwards.
+*/
+
+:root {
+  --bg: #0b0e14;
+  --surface: #12161f;
+  --surface-raised: #171c27;
+  --border: #232a38;
+  --border-soft: #1a2029;
+
+  --text-primary: #e6e9f0;
+  --text-secondary: #8a93a6;
+  --text-tertiary: #5b6478;
+
+  --accent: #4fd8c4;
+  --accent-dim: #2b7a6e;
+  --accent-wash: rgba(79, 216, 196, 0.1);
+
+  --warn: #f0b429;
+  --warn-wash: rgba(240, 180, 41, 0.12);
+  --danger: #f0576b;
+  --danger-wash: rgba(240, 87, 107, 0.12);
+
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 1px 1px, var(--border-soft) 1px, transparent 0) 0 0 / 28px 28px,
+    var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: var(--font-sans);
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app-shell {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-6);
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.app-header h1 .accent {
+  color: var(--accent);
+}
+
+.app-header .tagline {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.panel-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-3);
+}
+
+.field {
+  margin-bottom: var(--space-4);
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.field input[type="text"],
+.field textarea {
+  width: 100%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: var(--space-3);
+  resize: vertical;
+}
+
+.field textarea {
+  min-height: 84px;
+}
+
+.field-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-end;
+}
+
+.field-row .field {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #06110f;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #6ee3d1;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent-dim);
+  color: var(--text-primary);
+}
+
+.status-line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: var(--space-3);
+}
+
+.status-line.error {
+  color: var(--danger);
+}
+
+/* --- Token budget meter: the signature element --- */
+.budget-meter {
+  margin-bottom: var(--space-5);
+}
+
+.budget-meter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.budget-meter-header .used {
+  color: var(--text-primary);
+}
+
+.budget-meter-header .budget {
+  color: var(--text-tertiary);
+}
+
+.budget-meter-track {
+  height: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.budget-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 300ms ease;
+}
+
+.budget-meter-fill.warn {
+  background: var(--warn);
+}
+
+.budget-meter-fill.danger {
+  background: var(--danger);
+}
+
+.budget-meter-savings {
+  margin-top: var(--space-2);
+  font-size: 12px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+/* --- Answer + retrieved context --- */
+.answer-block {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.65;
+  margin-bottom: var(--space-2);
+}
+
+.intent-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-dim);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-bottom: var(--space-3);
+}
+
+.context-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+}
+
+.context-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.context-item-header .symbol-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.context-item-header .score {
+  color: var(--accent);
+}
+
+.context-item pre {
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-x: auto;
+  color: var(--text-secondary);
+}
+
+.empty-state {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+  padding: var(--space-6) 0;
+}
