@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # CodeLens AI
 
 **Adaptive Context Optimization for Repository-Scale AI Code Understanding**
