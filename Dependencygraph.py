@@ -39,26 +39,17 @@ class DependencyGraph:
         granularity. See that docstring for the rationale."""
         if class_id not in self.graph or not anchor_class_ids:
             return 0.0
+        if class_id in anchor_class_ids:
+            return 1.0
 
-        best_distance: int | None = None
+        # See CallGraph.proximity for why this is one bounded BFS rather
+        # than a shortest_path_length() call per anchor.
         undirected = self.graph.to_undirected(as_view=True)
-        for anchor in anchor_class_ids:
-            if anchor not in undirected:
-                continue
-            if anchor == class_id:
-                return 1.0
-            try:
-                distance = nx.shortest_path_length(
-                    undirected, source=class_id, target=anchor, cutoff=max_hops
-                )
-            except nx.NetworkXNoPath:
-                continue
-            if best_distance is None or distance < best_distance:
-                best_distance = distance
-
-        if best_distance is None:
+        distances = nx.single_source_shortest_path_length(undirected, class_id, cutoff=max_hops)
+        reachable = [distances[a] for a in anchor_class_ids if a in distances]
+        if not reachable:
             return 0.0
-        return max(0.0, 1.0 - (best_distance / max_hops))
+        return max(0.0, 1.0 - (min(reachable) / max_hops))
 
     def __len__(self) -> int:
         return self.graph.number_of_nodes()
