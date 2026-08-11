@@ -49,26 +49,20 @@ class CallGraph:
         """
         if method_id not in self.graph or not anchor_ids:
             return 0.0
+        if method_id in anchor_ids:
+            return 1.0
 
-        best_distance: int | None = None
+        # Single BFS from method_id (bounded to max_hops) rather than one
+        # shortest_path_length() call per anchor: cheaper when there are
+        # several anchors, and networkx's top-level shortest_path_length()
+        # dispatcher does not actually accept a `cutoff` kwarg -- only the
+        # single-source variant does.
         undirected = self.graph.to_undirected(as_view=True)
-        for anchor in anchor_ids:
-            if anchor not in undirected:
-                continue
-            if anchor == method_id:
-                return 1.0
-            try:
-                distance = nx.shortest_path_length(
-                    undirected, source=method_id, target=anchor, cutoff=max_hops
-                )
-            except nx.NetworkXNoPath:
-                continue
-            if best_distance is None or distance < best_distance:
-                best_distance = distance
-
-        if best_distance is None:
+        distances = nx.single_source_shortest_path_length(undirected, method_id, cutoff=max_hops)
+        reachable = [distances[a] for a in anchor_ids if a in distances]
+        if not reachable:
             return 0.0
-        return max(0.0, 1.0 - (best_distance / max_hops))
+        return max(0.0, 1.0 - (min(reachable) / max_hops))
 
     def neighbors_within_hops(self, method_id: str, hops: int) -> set[str]:
         """Undirected k-hop neighborhood -- used when the ranker wants to
