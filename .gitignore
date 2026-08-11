@@ -1,0 +1,43 @@
+# --- Python / backend ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Environment / secrets ---
+.env
+*.local.env
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- Java / parser-service ---
+parser-service/target/
+*.class
+*.jar
+!parser-service/lib/*.jar
+
+# --- Data produced at runtime (never commit indexed repos or vector indices) ---
+data/
+storage/
+*.faiss
+*.sqlite3
+chroma_db/
+repos/
+
+# --- Evaluation outputs ---
+eval_results/
+*.log
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
