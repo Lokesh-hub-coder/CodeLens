@@ -3,7 +3,7 @@ Run with: pytest backend/tests/test_ranker.py -v
 """
 import pytest
 
-from app.acor.ranker import _bucket_tokens, _exact_knapsack, _greedy_by_density, rank_and_select
+from app.acor.ranker import _exact_knapsack, _greedy_by_density, rank_and_select
 from app.acor.scorer import ScoredCandidate
 from app.api.schemas import ScoreBreakdown
 from app.config import Settings
@@ -49,15 +49,46 @@ def test_greedy_handles_zero_token_candidate_without_division_error():
     assert selected == {"Z"}
 
 
-def test_exact_knapsack_beats_or_matches_greedy_on_an_adversarial_case():
-    """Classic knapsack counterexample for greedy-by-density: one heavy,
-    slightly-better-density item excludes two lighter items that together
-    are worth more and fit exactly."""
-    heavy = _scored("heavy", composite=6.0, token_count=50)   # density 0.12
-    light1 = _scored("light1", composite=5.0, token_count=25)  # density 0.20
-    light2 = _scored("light2", composite=5.0, token_count=25)  # density 0.20
-    candidates = [heavy, light1, light2]
-    budget = 50
+def test_exact_knapsack_never_scores_worse_than_greedy():
+    """DP is optimal by construction, so on *any* instance its total value
+    must be >= greedy's. This is the property that actually matters --
+    checked here on the same instance test_exact_knapsack_beats_greedy_...
+    below uses, plus a handful of random-ish instances, rather than
+    hard-coding one specific expected subset that happens to coincide with
+    what greedy also finds (which was a bug in an earlier version of this
+    test: it asserted a specific answer that both algorithms agreed on,
+    so it never actually exercised the case where they *should* differ).
+    """
+    instances = [
+        [("heavy", 6.0, 50), ("light1", 5.0, 25), ("light2", 5.0, 25)],
+        [("a", 3.0, 12), ("b", 4.0, 9), ("c", 2.5, 7), ("d", 5.0, 20)],
+        [("solo", 6.0, 30), ("lite_a", 3.5, 16), ("lite_b", 3.5, 16)],
+    ]
+    for raw in instances:
+        candidates = [_scored(mid, score, tokens) for mid, score, tokens in raw]
+        budget = 30
+        greedy_selected = _greedy_by_density(candidates, budget)
+        exact_selected = _exact_knapsack(candidates, budget)
+
+        greedy_value = sum(c.score.composite for c in candidates if c.method_id in greedy_selected)
+        exact_value = sum(c.score.composite for c in candidates if c.method_id in exact_selected)
+        exact_tokens = sum(c.token_count for c in candidates if c.method_id in exact_selected)
+
+        assert exact_tokens <= budget
+        assert exact_value >= greedy_value - 1e-9
+
+
+def test_exact_knapsack_beats_greedy_on_a_constructed_adversarial_case():
+    """A genuine (verified) gap: greedy's density sort tries the two
+    highest-density items first, fills most of the budget on the first of
+    them, and then can't fit the second -- leaving it stuck with less
+    total value than simply taking the one solo item exact_knapsack finds.
+    """
+    solo = _scored("solo", composite=6.0, token_count=30)     # density 0.200
+    lite_a = _scored("lite_a", composite=3.5, token_count=16)  # density 0.219
+    lite_b = _scored("lite_b", composite=3.5, token_count=16)  # density 0.219
+    candidates = [solo, lite_a, lite_b]
+    budget = 30
 
     greedy_selected = _greedy_by_density(candidates, budget)
     exact_selected = _exact_knapsack(candidates, budget)
@@ -65,23 +96,27 @@ def test_exact_knapsack_beats_or_matches_greedy_on_an_adversarial_case():
     greedy_value = sum(c.score.composite for c in candidates if c.method_id in greedy_selected)
     exact_value = sum(c.score.composite for c in candidates if c.method_id in exact_selected)
 
-    assert exact_selected == {"light1", "light2"}
-    assert exact_value == pytest.approx(10.0)
-    assert exact_value >= greedy_value  # DP is optimal by construction
+    assert greedy_selected == {"lite_a"}  # picks the denser item first, then lite_b (16) doesn't fit in the remaining 14
+    assert exact_selected == {"solo"}
+    assert exact_value > greedy_value
+    assert exact_value == pytest.approx(6.0)
+    assert greedy_value == pytest.approx(3.5)
 
 
-def test_exact_knapsack_respects_bucketed_budget():
+def test_exact_knapsack_respects_the_budget():
     candidates = [_scored(f"C{i}", composite=float(i + 1), token_count=17) for i in range(5)]
     selected = _exact_knapsack(candidates, token_budget=40)
     total_tokens = sum(c.token_count for c in candidates if c.method_id in selected)
     assert total_tokens <= 40
 
 
-def test_bucket_tokens_is_ceiling_division():
-    assert _bucket_tokens(1) == 1
-    assert _bucket_tokens(10) == 1
-    assert _bucket_tokens(11) == 2
-    assert _bucket_tokens(0) == 1  # clamped to at least 1 bucket
+def test_exact_knapsack_table_is_bounded_by_total_weight_not_just_budget():
+    """When every candidate fits comfortably under the budget, the DP
+    should take all of them (and not, e.g., choke on a huge budget value
+    -- effective_budget is capped at the candidates' total weight)."""
+    candidates = [_scored(f"C{i}", composite=float(i + 1), token_count=5) for i in range(4)]
+    selected = _exact_knapsack(candidates, token_budget=10_000)
+    assert selected == {c.method_id for c in candidates}
 
 
 def test_rank_and_select_reports_selected_and_dropped_disjointly():
