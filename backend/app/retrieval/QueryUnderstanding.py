@@ -85,15 +85,19 @@ def classify_intent(query: str) -> QueryIntentLabel:
 
 def extract_anchor_symbols(query: str) -> set[str]:
     """Pull out tokens that look like Java identifiers rather than English
-    prose: CamelCase/PascalCase words, or anything immediately followed by
+    prose: CamelCase/PascalCase words, anything immediately followed by
     "(" (so lowercase "process(" is kept even though "process" alone would
-    look like an ordinary English word)."""
+    look like an ordinary English word), or anything immediately preceded
+    by "." (a qualified reference like "OrderService.validate" or
+    "user.getEmail" -- the member name after the dot is meaningful even
+    when, by itself, it has neither call syntax nor case structure)."""
     anchors: set[str] = set()
     for match in _IDENTIFIER_PATTERN.finditer(query):
         token, is_call = match.group(1), match.group(2)
         if token.lower() in _STOPWORDS:
             continue
-        looks_like_identifier = is_call is not None or _has_case_structure(token)
+        preceded_by_dot = match.start() > 0 and query[match.start() - 1] == "."
+        looks_like_identifier = is_call is not None or _has_case_structure(token) or preceded_by_dot
         if looks_like_identifier and len(token) > 1:
             anchors.add(token)
     return anchors
