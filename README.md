@@ -1,11 +1,8 @@
-# CodeLens AI
+# CodeLens
 
 **Adaptive Context Optimization for Repository-Scale AI Code Understanding**
 
-Major project, Semester VII, Computer Science &amp; Engineering, Shri
-Ramdeobaba College of Engineering &amp; Management, Nagpur.
-
-CodeLens AI takes a natural-language developer query about a large Java
+CodeLens takes a natural-language developer query about a large Java
 repository (a bug report, "why does X fail," "where is Y implemented") and
 builds the smallest, most relevant slice of the repository's actual source
 -- under a hard token budget -- before handing it to an LLM for bug
@@ -188,11 +185,5 @@ from, but the short version, roughly in the order you'll hit it:
    `top_k_candidates`, and larger embedding models all trade speed for
    possible quality; report where you landed and why.
 
-## License
 
-Add your team's chosen license here before making the repository public
-(MIT and Apache-2.0 are the common defaults for academic project code).
-=======
-# CodeLens
-A project focused on adaptive context optimization for understanding code across entire repositories
->>>>>>> 56a8aab805a922e23164d25c4849c050fb64d369
+
