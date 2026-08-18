@@ -1,6 +1,8 @@
 """
 Run with: pytest backend/tests/test_scorer.py -v
 """
+import pytest
+
 from app.acor.scorer import Candidate, _min_max_normalize, _resolve_anchors, score_candidates
 from app.config import ACORWeights
 from app.graphs.call_graph import CallGraph
@@ -16,7 +18,7 @@ from app.retrieval.query_understanding import QueryAnalysis, QueryIntentLabel
 
 def test_min_max_normalize_spans_full_range():
     result = _min_max_normalize([0.60, 0.70, 0.80])
-    assert result == [0.0, 0.5, 1.0]
+    assert result == pytest.approx([0.0, 0.5, 1.0])
 
 
 def test_min_max_normalize_constant_values_do_not_divide_by_zero():
