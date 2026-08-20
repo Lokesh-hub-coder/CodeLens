@@ -28,7 +28,7 @@
   <dependencies>
     <!-- Core AST parsing + the symbol solver, which is what lets us resolve
          a method call expression back to the fully-qualified declaring
-         class -- required for accurate cross-file call-graph edges. -->
+         class (required for accurate cross-file call-graph edges). -->
     <dependency>
       <groupId>com.github.javaparser</groupId>
       <artifactId>javaparser-symbol-solver-core</artifactId>
