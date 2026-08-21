@@ -19,6 +19,8 @@ frontend/.vite/
 
 # --- Java / parser-service ---
 parser-service/target/
+.maven/
+parser-service/test_out.json
 *.class
 *.jar
 !parser-service/lib/*.jar

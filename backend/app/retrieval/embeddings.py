@@ -49,14 +49,12 @@ class EmbeddingModel:
 
 
 @lru_cache
-def get_embedding_model(settings: Settings) -> EmbeddingModel:
-    """Cached loader -- sentence-transformers model loading is expensive
-    (seconds, plus a first-time download), so every caller within a process
-    shares one loaded model rather than re-loading per request."""
-    # Imported lazily so `import app.config` alone (e.g. in tests that don't
-    # touch embeddings) never pays sentence-transformers' import cost or
-    # requires it to be installed.
+def _load_model(model_name: str, dim: int) -> EmbeddingModel:
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(settings.embedding_model)
-    return EmbeddingModel(model=model, dim=settings.embedding_dim)
+    model = SentenceTransformer(model_name)
+    return EmbeddingModel(model=model, dim=dim)
+
+
+def get_embedding_model(settings: Settings) -> EmbeddingModel:
+    return _load_model(settings.embedding_model, settings.embedding_dim)
