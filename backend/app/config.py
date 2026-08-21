@@ -8,6 +8,10 @@ from functools import lru_cache
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Project root = 3 levels up from backend/app/config.py
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_JAR  = _PROJECT_ROOT / "parser-service" / "target" / "parser-service-1.0.0.jar"
+
 
 @dataclass
 class ACORWeights:
@@ -36,7 +40,7 @@ class Settings(BaseSettings):
     )
 
     # Parser
-    java_parser_jar_path: Path = Path("parser-service/target/parser-service-1.0.0.jar")
+    java_parser_jar_path: Path = _DEFAULT_JAR
     java_bin: str = "java"
     parser_timeout_seconds: int = 120
 
