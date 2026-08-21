@@ -197,6 +197,8 @@ async def query_repository(
     request:  QueryRequest,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> QueryResponse:
+    from app.core.candidate_pipeline import get_candidates
+
     repo_index   = _get_repo_index(repo_id, settings)
     query        = analyze_query(request.query)
     token_budget = request.token_budget or settings.default_token_budget
@@ -204,39 +206,20 @@ async def query_repository(
     t_retrieval = LatencyTracker()
     t_retrieval.start()
 
-    # 1. Semantic search
     embedding_model = get_embedding_model(settings)
-    q_vec   = embedding_model.encode_one(request.query)
-    results = repo_index.vector_store.search(q_vec, top_k=settings.top_k_candidates)
 
-    # 2. Build Candidate list
-    candidates: list[Candidate] = []
-    for sr in results:
-        meta = sr.metadata
-        try:
-            snippet = read_snippet(
-                repo_index.repo_root / meta["file_path"],
-                meta["start_line"],
-                meta["end_line"],
-            )
-        except Exception:
-            snippet = meta.get("name", "")
-        candidates.append(Candidate(
-            method_id=meta["method_id"],
-            class_id=meta["class_id"],
-            name=meta["name"],
-            kind="method",
-            file_path=meta["file_path"],
-            start_line=meta["start_line"],
-            end_line=meta["end_line"],
-            snippet=snippet,
-            token_count=count_tokens(snippet),
-            raw_semantic_score=float(sr.score),
-        ))
+    # Candidate generation: root-cause (semantic + graph) or change-impact (graph + supplement)
+    # Routes automatically based on intent / changed_symbol param
+    candidates = get_candidates(
+        query=query,
+        repo_index=repo_index,
+        embedding_model=embedding_model,
+        settings=settings,
+    )
 
     naive_baseline_tokens = sum(c.token_count for c in candidates)
 
-    # 3. ACOR: score
+    # ACOR: score with intent-adaptive weights
     weights = _INTENT_WEIGHTS.get(query.intent, settings.acor_weights)
     scored  = score_candidates(
         candidates, query,
@@ -247,12 +230,12 @@ async def query_repository(
         max_hops=settings.graph_max_hops,
     )
 
-    # 4. ACOR: rank + select
+    # ACOR: rank + select within token budget
     rank_result  = rank_and_select(scored, token_budget, settings)
     context_text = build_context(rank_result.selected, repo_index.repo_root)
     retrieval_ms = t_retrieval.stop_ms()
 
-    # 5. LLM
+    # LLM call
     t_llm = LatencyTracker()
     t_llm.start()
     llm_response = get_llm_client(settings).generate(
@@ -261,7 +244,6 @@ async def query_repository(
     )
     llm_ms = t_llm.stop_ms()
 
-    # 6. Build response
     retrieved_context = [
         RetrievedContextItem(
             symbol_name=c.name,
