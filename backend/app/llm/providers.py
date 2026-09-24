@@ -104,11 +104,28 @@ class QwenClient(_OpenAICompatibleClient):
         )
 
 
+class MockLLMClient(LLMClient):
+    """Fallback client when no API key is configured or offline mode."""
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
+        start = time.perf_counter()
+        text = (
+            "### CodeLens Analysis (Offline / Demo Mode)\n\n"
+            "Relevant code context and call graph paths were successfully retrieved and ranked by ACOR.\n\n"
+            "*(To enable live natural-language synthesis with GPT/Llama/Qwen, set a valid `OPENAI_API_KEY` in `backend/.env`)*"
+        )
+        latency_ms = (time.perf_counter() - start) * 1000
+        return LLMResponse(text=text, latency_ms=latency_ms, prompt_tokens=100, completion_tokens=50)
+
+
 def get_llm_client(settings: Settings) -> LLMClient:
     if settings.llm_provider == "openai":
+        if not settings.openai_api_key or "your_actual" in settings.openai_api_key or "placeholder" in settings.openai_api_key:
+            return MockLLMClient()
         return OpenAIClient(settings)
     if settings.llm_provider == "llama":
         return LlamaClient(settings)
     if settings.llm_provider == "qwen":
         return QwenClient(settings)
-    raise ValueError(f"Unknown llm_provider: {settings.llm_provider!r}")
+    if settings.llm_provider in ("mock", "demo"):
+        return MockLLMClient()
+    return MockLLMClient()

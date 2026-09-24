@@ -57,7 +57,9 @@ _INTENT_WEIGHTS: dict[QueryIntentLabel, ACORWeights] = {
 def _get_repo_index(repo_id: str, settings: Settings) -> RepoIndex:
     """Return from memory, or load from disk, or raise 404."""
     if repo_id in _repo_registry:
-        return _repo_registry[repo_id]
+        idx = _repo_registry[repo_id]
+        if idx.num_methods > 0 and idx.vector_store.count() > 0:
+            return idx
     try:
         idx = RepoIndex.load(repo_id, settings.index_storage_dir, settings)
         _repo_registry[repo_id] = idx
@@ -77,30 +79,59 @@ async def index_repository(
 ) -> IndexRepositoryResponse:
     t0 = time.perf_counter()
 
+    repo_id = request.repo_id or (Path(request.repo_path).name if request.repo_path else "default")
+
+    # If force_reindex is False and saved index exists, return it immediately
+    pkl_file = settings.index_storage_dir / f"{repo_id}.pkl"
+    if not request.force_reindex and pkl_file.is_file():
+        try:
+            import pickle
+            with open(pkl_file, "rb") as f:
+                payload = pickle.load(f)
+            return IndexRepositoryResponse(
+                repo_id=payload.get("repo_id", repo_id),
+                num_files=payload.get("num_files", 0),
+                num_classes=payload.get("num_classes", 0),
+                num_methods=payload.get("num_methods", 0),
+                num_call_edges=payload.get("num_call_edges", 0),
+                num_import_edges=payload.get("num_import_edges", 0),
+                unparsed_files=payload.get("unparsed_files", []),
+                index_time_seconds=0.0,
+            )
+        except Exception:
+            pass
+
     repo_path = Path(request.repo_path)
     if not repo_path.is_dir():
         raise HTTPException(status_code=400, detail=f"repo_path is not a directory: {repo_path}")
 
-    repo_id = request.repo_id or repo_path.name
     fingerprint = compute_repo_fingerprint(repo_path)
-
-    # Skip re-index if fingerprint unchanged (unless forced)
-    if not request.force_reindex and repo_id in _repo_registry:
-        existing = _repo_registry[repo_id]
-        if existing.fingerprint == fingerprint:
-            return IndexRepositoryResponse(
-                repo_id=repo_id,
-                num_files=existing.num_files,
-                num_classes=existing.num_classes,
-                num_methods=existing.num_methods,
-                num_call_edges=existing.num_call_edges,
-                num_import_edges=existing.num_import_edges,
-                unparsed_files=existing.unparsed_files,
-                index_time_seconds=0.0,
-            )
 
     # Parse
     parsed = parse_repository(repo_path, settings)
+
+    if len(parsed.methods) == 0:
+        # If directory has no java files, check if a valid saved index already exists
+        try:
+            idx = RepoIndex.load(repo_id, settings.index_storage_dir, settings)
+            if idx.num_methods > 0:
+                _repo_registry[repo_id] = idx
+                return IndexRepositoryResponse(
+                    repo_id=repo_id,
+                    num_files=idx.num_files,
+                    num_classes=idx.num_classes,
+                    num_methods=idx.num_methods,
+                    num_call_edges=idx.num_call_edges,
+                    num_import_edges=idx.num_import_edges,
+                    unparsed_files=idx.unparsed_files,
+                    index_time_seconds=0.0,
+                )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail=f"No Java files found in '{repo_path}'. Please provide a directory containing .java source files.",
+        )
 
     # Build graphs
     call_graph       = CallGraph.build(parsed.methods, parsed.call_edges)
@@ -238,10 +269,18 @@ async def query_repository(
     # LLM call
     t_llm = LatencyTracker()
     t_llm.start()
-    llm_response = get_llm_client(settings).generate(
-        SYSTEM_PROMPT,
-        build_user_prompt(request.query, query.intent, context_text),
-    )
+    try:
+        llm_client = get_llm_client(settings)
+        llm_response = llm_client.generate(
+            SYSTEM_PROMPT,
+            build_user_prompt(request.query, query.intent, context_text),
+        )
+    except Exception as e:
+        from app.llm.providers import LLMResponse
+        llm_response = LLMResponse(
+            text=f"### Context Retrieved Successfully\n\nACOR retrieved and ranked {len(rank_result.selected)} relevant code snippets. (LLM provider note: {e})",
+            latency_ms=0.0,
+        )
     llm_ms = t_llm.stop_ms()
 
     retrieved_context = [

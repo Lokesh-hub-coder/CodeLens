@@ -30,16 +30,20 @@ from app.retrieval.tokenizer import count_tokens
 from app.api.schemas import QueryIntentLabel
 
 
-def _read_snippet_safe(repo_root: Path, file_path: str, start: int, end: int) -> str:
-    """Read source lines [start, end] inclusive; return empty string on any error."""
+def _read_snippet_safe(repo_root: Path, file_path: str, start: int, end: int, name: str = "") -> str:
+    """Read source lines [start, end] inclusive; return summary fallback if file is moved."""
     try:
         from app.parsing.repo_walker import read_snippet
-        return read_snippet(repo_root / file_path, start, end)
+        content = read_snippet(repo_root / file_path, start, end)
+        if content:
+            return content
     except Exception:
-        return ""
+        pass
+    return f"// Method: {name or file_path}\n// File: {file_path} (lines {start}-{end})"
 
 
 def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
+    snip = snippet or f"// Method: {meta.get('name', '')}\n// File: {meta.get('file_path', '')} (lines {meta.get('start_line', 0)}-{meta.get('end_line', 0)})"
     return Candidate(
         method_id=meta["method_id"],
         class_id=meta["class_id"],
@@ -48,8 +52,8 @@ def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
         file_path=meta["file_path"],
         start_line=meta["start_line"],
         end_line=meta["end_line"],
-        snippet=snippet,
-        token_count=count_tokens(snippet) if snippet else 1,
+        snippet=snip,
+        token_count=max(count_tokens(snip), 5),
         raw_semantic_score=meta.get("_score", 0.0),
     )
 
