@@ -45,12 +45,16 @@ class Settings(BaseSettings):
     parser_timeout_seconds: int = 120
 
     # Embeddings
-    embedding_model: str = "flax-sentence-embeddings/st-codesearch-distilroberta-base"
-    embedding_dim: int = 768
+    embedding_backend: str = "fastembed"  # "fastembed" | "sentence_transformers"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dim: int = 384
 
     # Vector store
-    vector_db_backend: str = "faiss"   # "faiss" | "chroma"
+    vector_db_backend: str = "qdrant"   # "qdrant" | "faiss" | "chroma"
     chroma_persist_dir: Path = Path("./data/chroma")
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    qdrant_path: Path = Path("./data/qdrant")
 
     # Index persistence
     index_storage_dir: Path = Path("./data/index")
@@ -58,6 +62,7 @@ class Settings(BaseSettings):
     # Retrieval
     top_k_candidates: int = 50
     graph_max_hops: int = 4
+    acor_use_intent_weights: bool = False
 
     # Ranking
     ranker_strategy: str = "greedy"    # "greedy" | "exact"
@@ -65,8 +70,10 @@ class Settings(BaseSettings):
     default_token_budget: int = 8000
 
     # LLM
-    llm_provider: str = "openai"       # "openai" | "llama" | "qwen"
-    llm_model_name: str = "gpt-4o-mini"
+    llm_provider: str = "groq"         # "groq" | "openai" | "llama" | "qwen"
+    llm_model_name: str = "openai/gpt-oss-120b"
+    groq_api_key: str = ""
+    groq_model_name: str = "openai/gpt-oss-120b"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     llama_base_url: str = "http://localhost:11434/v1"

@@ -39,8 +39,9 @@ class IndexRepositoryResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    query:        str
-    token_budget: Optional[int] = None
+    query:          str
+    token_budget:   Optional[int] = None
+    changed_symbol: Optional[str] = None
 
 
 class RetrievedContextItem(BaseModel):

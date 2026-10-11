@@ -33,23 +33,25 @@ class RepoIndex:
     num_call_edges:   int
     num_import_edges: int = 0
     unparsed_files:   list[str] = field(default_factory=list)
+    file_token_counts: dict[str, int] = field(default_factory=dict)
 
     def save(self, storage_dir: Path) -> None:
         """Persist graphs + symbol index.  VectorStore persists itself."""
         storage_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "repo_id":          self.repo_id,
-            "repo_root":        self.repo_root,
-            "fingerprint":      self.fingerprint,
-            "call_graph":       self.call_graph,
-            "dependency_graph": self.dependency_graph,
-            "symbol_index":     self.symbol_index,
-            "num_files":        self.num_files,
-            "num_classes":      self.num_classes,
-            "num_methods":      self.num_methods,
-            "num_call_edges":   self.num_call_edges,
-            "num_import_edges": self.num_import_edges,
-            "unparsed_files":   self.unparsed_files,
+            "repo_id":           self.repo_id,
+            "repo_root":         self.repo_root,
+            "fingerprint":       self.fingerprint,
+            "call_graph":        self.call_graph,
+            "dependency_graph":  self.dependency_graph,
+            "symbol_index":      self.symbol_index,
+            "num_files":         self.num_files,
+            "num_classes":       self.num_classes,
+            "num_methods":       self.num_methods,
+            "num_call_edges":    self.num_call_edges,
+            "num_import_edges":  self.num_import_edges,
+            "unparsed_files":    self.unparsed_files,
+            "file_token_counts": self.file_token_counts,
         }
         path = storage_dir / f"{self.repo_id}.pkl"
         with open(path, "wb") as f:

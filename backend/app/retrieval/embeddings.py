@@ -26,35 +26,47 @@ from app.config import Settings
 
 @dataclass(frozen=True)
 class EmbeddingModel:
-    model: object  # sentence_transformers.SentenceTransformer, typed loosely to avoid a hard import at module load
+    model: object
     dim: int
+    backend: str = "fastembed"
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Returns an (N, dim) float32 array, L2-normalized so that a plain
-        dot product equals cosine similarity (both vector_store.py backends
-        rely on this)."""
+        dot product equals cosine similarity."""
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        vectors = self.model.encode(
-            texts,
-            batch_size=32,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        )
-        return vectors.astype(np.float32)
+        if self.backend == "fastembed":
+            embeddings = list(self.model.embed(texts))
+            arr = np.array(embeddings, dtype=np.float32)
+            # L2 normalize
+            norms = np.linalg.norm(arr, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            return (arr / norms).astype(np.float32)
+        else:
+            vectors = self.model.encode(
+                texts,
+                batch_size=32,
+                show_progress_bar=False,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
+            return vectors.astype(np.float32)
 
     def encode_one(self, text: str) -> np.ndarray:
         return self.encode([text])[0]
 
 
 @lru_cache
-def _load_model(model_name: str, dim: int) -> EmbeddingModel:
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(model_name)
-    return EmbeddingModel(model=model, dim=dim)
+def _load_model(model_name: str, dim: int, backend: str = "fastembed") -> EmbeddingModel:
+    if backend == "fastembed":
+        from fastembed import TextEmbedding
+        model = TextEmbedding(model_name=model_name)
+        return EmbeddingModel(model=model, dim=dim, backend="fastembed")
+    else:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer(model_name)
+        return EmbeddingModel(model=model, dim=dim, backend="sentence_transformers")
 
 
 def get_embedding_model(settings: Settings) -> EmbeddingModel:
-    return _load_model(settings.embedding_model, settings.embedding_dim)
+    return _load_model(settings.embedding_model, settings.embedding_dim, settings.embedding_backend)

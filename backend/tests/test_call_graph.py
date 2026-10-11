@@ -103,3 +103,14 @@ def test_neighbors_within_hops():
     graph = _build_chain_graph()
     neighbors = graph.neighbors_within_hops("com.foo.B#b()", hops=1)
     assert neighbors == {"com.foo.A#a()", "com.foo.C#c()"}
+
+
+def test_callers_within_hops():
+    graph = _build_chain_graph()
+    # A -> B -> C -> D
+    # Callers of C within 1 hop: only B (not D, because D is a callee)
+    callers_1 = graph.callers_within_hops("com.foo.C#c()", hops=1)
+    assert callers_1 == {"com.foo.B#b()"}
+    # Callers of C within 2 hops: B and A
+    callers_2 = graph.callers_within_hops("com.foo.C#c()", hops=2)
+    assert callers_2 == {"com.foo.B#b()", "com.foo.A#a()"}

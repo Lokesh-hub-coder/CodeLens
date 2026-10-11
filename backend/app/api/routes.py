@@ -165,6 +165,20 @@ async def index_repository(
         vectors = embedding_model.encode(snippets)
         vector_store.add(ids, vectors, metadatas)
 
+    # Compute whole-file token counts for touched files to enable naive baseline calculations
+    file_token_counts: dict[str, int] = {}
+    for m in parsed.methods:
+        if m.file_path not in file_token_counts:
+            try:
+                full_file_path = repo_path / m.file_path
+                if full_file_path.is_file():
+                    content = full_file_path.read_text(encoding="utf-8", errors="replace")
+                    file_token_counts[m.file_path] = count_tokens(content)
+                else:
+                    file_token_counts[m.file_path] = 0
+            except Exception:
+                file_token_counts[m.file_path] = 0
+
     num_files = len({m.file_path for m in parsed.methods})
     repo_index = RepoIndex(
         repo_id=repo_id,
@@ -180,6 +194,7 @@ async def index_repository(
         num_call_edges=len(parsed.call_edges),
         num_import_edges=len(parsed.import_edges),
         unparsed_files=parsed.unparsed_files,
+        file_token_counts=file_token_counts,
     )
     repo_index.save(settings.index_storage_dir)
     _repo_registry[repo_id] = repo_index
@@ -246,12 +261,23 @@ async def query_repository(
         repo_index=repo_index,
         embedding_model=embedding_model,
         settings=settings,
+        changed_symbol=request.changed_symbol,
     )
 
-    naive_baseline_tokens = sum(c.token_count for c in candidates)
+    # Unique files touched by any candidate (Bug 1a fix: naive baseline = whole files)
+    touched_files = {c.file_path for c in candidates}
+    naive_baseline_tokens = sum(
+        repo_index.file_token_counts.get(f, 0) for f in touched_files
+    )
+    if naive_baseline_tokens == 0:
+        naive_baseline_tokens = sum(c.token_count for c in candidates)
 
-    # ACOR: score with intent-adaptive weights
-    weights = _INTENT_WEIGHTS.get(query.intent, settings.acor_weights)
+    # ACOR: score with intent-adaptive weights (Bug 1c fix: toggle option)
+    if settings.acor_use_intent_weights:
+        weights = _INTENT_WEIGHTS.get(query.intent, settings.acor_weights)
+    else:
+        weights = settings.acor_weights
+
     scored  = score_candidates(
         candidates, query,
         repo_index.call_graph,
@@ -296,6 +322,9 @@ async def query_repository(
         for c in rank_result.selected
     ]
 
+    # Bug 1b fix: total_context_tokens should count the actual formatted context_text including headers
+    actual_context_tokens = count_tokens(context_text) if context_text else rank_result.total_tokens
+
     return QueryResponse(
         repo_id=repo_id,
         query=request.query,
@@ -304,7 +333,7 @@ async def query_repository(
         retrieved_context=retrieved_context,
         candidates_considered=len(candidates),
         candidates_selected=len(rank_result.selected),
-        total_context_tokens=rank_result.total_tokens,
+        total_context_tokens=actual_context_tokens,
         token_budget=token_budget,
         naive_baseline_tokens=naive_baseline_tokens,
         retrieval_latency_ms=retrieval_ms,

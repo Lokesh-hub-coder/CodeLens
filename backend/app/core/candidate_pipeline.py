@@ -164,24 +164,23 @@ def generate_change_impact_candidates(
     settings:        Settings,
     hop_limit:       int = 3,
 ) -> list[Candidate]:
-    """BFS from changed symbol + small semantic supplement.
+    """Directed BFS (callers) from changed symbol + small semantic supplement.
 
     1. Resolve changed_symbol -> method IDs via symbol_index
-    2. BFS callers/callees up to hop_limit via call_graph
-    3. Also expand dependency_graph for the changed symbol's class
-    4. Supplement with semantic search top-20 (lower than root-cause)
-    5. Deduplicate and return
+    2. Directed reverse BFS (callers) up to hop_limit via call_graph
+    3. Supplement with semantic search top-20 (lower than root-cause)
+    4. Deduplicate and return
     """
     repo_root = repo_index.repo_root
     candidates: dict[str, Candidate] = {}
 
-    # Step 1+2: resolve symbol -> BFS expansion
+    # Step 1+2: resolve symbol -> directed reverse BFS (callers)
     locs = repo_index.symbol_index.exact_lookup(changed_symbol)
     for loc in locs:
         if loc.kind != SymbolKind.METHOD:
             continue
-        neighbors = repo_index.call_graph.neighbors_within_hops(loc.symbol_id, max_hops=hop_limit)
-        for mid in neighbors | {loc.symbol_id}:
+        callers = repo_index.call_graph.callers_within_hops(loc.symbol_id, hops=hop_limit)
+        for mid in callers | {loc.symbol_id}:
             if mid in candidates:
                 continue
             name = mid.split("#")[1].split("(")[0] if "#" in mid else mid
