@@ -20,6 +20,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -112,15 +115,32 @@ public final class RepoParser {
             }
         }
 
+        // Diagnostic-only pre-pass: name and arity approximate calls whose
+        // declarations are present in this repository's parsed source.
+        Set<String> probableInRepoMethods = new HashSet<>();
+        for (CompilationUnit cu : compilationUnits) {
+            for (MethodDeclaration decl : cu.findAll(MethodDeclaration.class)) {
+                Optional<ClassOrInterfaceDeclaration> owner =
+                        decl.findAncestor(ClassOrInterfaceDeclaration.class);
+                if (owner.isPresent()
+                        && classById.containsKey(resolveQualifiedName(owner.get()))) {
+                    probableInRepoMethods.add(methodNameAndArity(
+                            decl.getNameAsString(), decl.getParameters().size()));
+                }
+            }
+        }
+
         // Pass 2b: methods, call edges, import edges. Requires classById
         // to already be complete (import edges only point at classes we
         // actually parsed -- see buildImportEdges).
         // ── Diagnostic accumulators ──────────────────────────────────────────
         int totalVisited = 0, totalResolved = 0, totalCallEdge = 0,
-            totalExternal = 0, totalUnresolved = 0;
+            totalExternal = 0, totalUnresolved = 0, totalProbableInRepo = 0;
+        Map<String, Integer> resolveExceptionMessages = new HashMap<>();
         // ────────────────────────────────────────────────────────────────────
         for (CompilationUnit cu : compilationUnits) {
-            MethodAndCallVisitor visitor = new MethodAndCallVisitor(classById.keySet());
+            MethodAndCallVisitor visitor = new MethodAndCallVisitor(
+                    classById.keySet(), probableInRepoMethods);
             visitor.visit(cu, null);
             output.methods.addAll(visitor.methods);
             output.call_edges.addAll(visitor.callEdges);
@@ -131,6 +151,9 @@ public final class RepoParser {
             totalCallEdge   += visitor.diagCallEdge;
             totalExternal   += visitor.diagExternal;
             totalUnresolved += visitor.diagUnresolved;
+            totalProbableInRepo += visitor.diagProbableInRepo;
+            visitor.resolveExceptionMessages.forEach(
+                    (message, count) -> resolveExceptionMessages.merge(message, count, Integer::sum));
             // ─────────────────────────────────────────────────────────────────
         }
 
@@ -139,12 +162,24 @@ public final class RepoParser {
         double callEdgeRate  = totalVisited   > 0 ? 100.0 * totalCallEdge   / totalVisited   : 0;
         double externalRate  = totalVisited   > 0 ? 100.0 * totalExternal   / totalVisited   : 0;
         double unresolvedRate = totalVisited  > 0 ? 100.0 * totalUnresolved / totalVisited   : 0;
+        double edgeRecallEstimate = totalProbableInRepo > 0
+                ? 100.0 * totalCallEdge / totalProbableInRepo : 0;
         System.err.printf("[DIAG] MethodCallExpr visited : %d%n", totalVisited);
         System.err.printf("[DIAG] resolve() succeeded    : %d (%.1f%%)%n", totalResolved, resolvedRate);
         System.err.printf("[DIAG]   -> became CallEdge   : %d (%.1f%% of total) [in-repo calls]%n", totalCallEdge, callEdgeRate);
         System.err.printf("[DIAG]   -> external/skipped  : %d (%.1f%% of total) [JDK/library — correct]%n", totalExternal, externalRate);
         System.err.printf("[DIAG] resolve() threw        : %d (%.1f%%) [unresolvable — correct skip]%n", totalUnresolved, unresolvedRate);
         System.err.printf("[DIAG] Graph signal estimate  : %.1f%% of visited calls became graph edges%n", callEdgeRate);
+        System.err.printf(
+                "[DIAG] edge_recall_estimate   : %d/%d (%.1f%%) [CallEdges / probable in-repo calls]%n",
+                totalCallEdge, totalProbableInRepo, edgeRecallEstimate);
+        resolveExceptionMessages.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .limit(5)
+                .forEach(entry -> System.err.printf(
+                        "[DIAG] resolve() exception  : %s (count=%d)%n",
+                        entry.getKey(), entry.getValue()));
         // ─────────────────────────────────────────────────────────────────────
 
         return output;
@@ -251,6 +286,10 @@ public final class RepoParser {
         return decl.getNameAsString() + "(" + params + ")";
     }
 
+    private static String methodNameAndArity(String name, int arity) {
+        return name + "/" + arity;
+    }
+
     /**
      * Single AST walk collecting both MethodInfo and CallEdge -- combined
      * into one visitor (rather than two separate passes) since both need
@@ -261,6 +300,7 @@ public final class RepoParser {
         final List<CodeEntities.MethodInfo> methods = new ArrayList<>();
         final List<CodeEntities.CallEdge> callEdges = new ArrayList<>();
         private final Set<String> knownClassIds;
+        private final Set<String> probableInRepoMethods;
 
         // ── Diagnostic counters (additive only, no logic changed) ──────────
         int diagTotal       = 0;  // total MethodCallExpr nodes visited that have a trackable caller
@@ -268,10 +308,13 @@ public final class RepoParser {
         int diagCallEdge    = 0;  // resolved AND callee is in knownClassIds  → real CallEdge
         int diagExternal    = 0;  // resolved but callee outside our source   → correctly skipped
         int diagUnresolved  = 0;  // resolve() threw                          → correctly skipped
+        int diagProbableInRepo = 0;
+        final Map<String, Integer> resolveExceptionMessages = new HashMap<>();
         // ───────────────────────────────────────────────────────────────────
 
-        MethodAndCallVisitor(Set<String> knownClassIds) {
+        MethodAndCallVisitor(Set<String> knownClassIds, Set<String> probableInRepoMethods) {
             this.knownClassIds = knownClassIds;
+            this.probableInRepoMethods = probableInRepoMethods;
         }
 
         @Override
@@ -328,6 +371,10 @@ public final class RepoParser {
 
             // ── Diagnostic: count this call as "visited" ─────────────────
             diagTotal++;
+            if (probableInRepoMethods.contains(methodNameAndArity(
+                    call.getNameAsString(), call.getArguments().size()))) {
+                diagProbableInRepo++;
+            }
             // ─────────────────────────────────────────────────────────────
 
             // Resolution can fail for many legitimate reasons (generics the
@@ -344,6 +391,11 @@ public final class RepoParser {
                 diagResolved++; // ── Diagnostic: resolution succeeded ──────
             } catch (Exception unresolved) {
                 diagUnresolved++; // ── Diagnostic: resolution threw ─────────
+                String message = unresolved.getMessage();
+                resolveExceptionMessages.merge(
+                        message == null || message.isBlank() ? "<no message>" : message,
+                        1,
+                        Integer::sum);
                 return;
             }
 
