@@ -17,10 +17,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from app.config import Settings
+
+if TYPE_CHECKING:
+    from qdrant_client import QdrantClient
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,9 @@ class VectorStore(ABC):
 
     @abstractmethod
     def count(self) -> int: ...
+
+    @abstractmethod
+    def clear(self) -> None: ...
 
 
 class FaissVectorStore(VectorStore):
@@ -81,6 +88,11 @@ class FaissVectorStore(VectorStore):
     def count(self) -> int:
         return self.index.ntotal
 
+    def clear(self) -> None:
+        self.index = self._faiss.IndexFlatIP(self.dim)
+        self._id_by_row.clear()
+        self._metadata_by_id.clear()
+
 
 class ChromaVectorStore(VectorStore):
     """Persistent, metadata-filterable store -- useful once multiple
@@ -113,11 +125,21 @@ class ChromaVectorStore(VectorStore):
     def count(self) -> int:
         return self.collection.count()
 
+    def clear(self) -> None:
+        ids = self.collection.get(include=[])["ids"]
+        if ids:
+            self.collection.delete(ids=ids)
+
 
 class QdrantVectorStore(VectorStore):
     """Qdrant-backed vector store with support for local embedded or remote cloud instance."""
 
-    def __init__(self, settings: Settings, collection_name: str) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        collection_name: str,
+        client: QdrantClient | None = None,
+    ) -> None:
         from qdrant_client import QdrantClient
         from qdrant_client.http import models as rest_models
 
@@ -126,7 +148,9 @@ class QdrantVectorStore(VectorStore):
         self.collection_name = f"codelens_{sanitized_name}"
         self.dim = settings.embedding_dim
 
-        if settings.qdrant_url and settings.qdrant_api_key:
+        if client is not None:
+            self.client = client
+        elif settings.qdrant_url and settings.qdrant_api_key:
             self.client = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
         elif settings.qdrant_url:
             self.client = QdrantClient(url=settings.qdrant_url)
@@ -209,6 +233,18 @@ class QdrantVectorStore(VectorStore):
     def count(self) -> int:
         info = self.client.get_collection(collection_name=self.collection_name)
         return info.points_count or 0
+
+    def clear(self) -> None:
+        from qdrant_client.http import models as rest_models
+
+        self.client.delete_collection(collection_name=self.collection_name)
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=rest_models.VectorParams(
+                size=self.dim,
+                distance=rest_models.Distance.COSINE,
+            ),
+        )
 
 
 def get_vector_store(settings: Settings, collection_name: str) -> VectorStore:

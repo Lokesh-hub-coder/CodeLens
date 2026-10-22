@@ -18,6 +18,10 @@ from app.graphs.symbol_index import SymbolIndex
 from app.retrieval.vector_store import VectorStore, get_vector_store
 
 
+class RepoRootMissing(FileNotFoundError):
+    """Raised when an index points to a repository root that is unavailable."""
+
+
 @dataclass
 class RepoIndex:
     repo_id:          str
@@ -40,7 +44,7 @@ class RepoIndex:
         storage_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "repo_id":           self.repo_id,
-            "repo_root":         self.repo_root,
+            "repo_root":         self.repo_root.resolve(),
             "fingerprint":       self.fingerprint,
             "call_graph":        self.call_graph,
             "dependency_graph":  self.dependency_graph,
@@ -70,6 +74,12 @@ class RepoIndex:
             raise FileNotFoundError(f"No index found for repo_id='{repo_id}'")
         with open(path, "rb") as f:
             payload = pickle.load(f)
+        repo_root = Path(payload["repo_root"])
+        if not repo_root.is_absolute() or not repo_root.is_dir():
+            raise RepoRootMissing(
+                f"Stored repository root '{payload['repo_root']}' is missing or is not a directory."
+            )
+        payload["repo_root"] = repo_root
         vector_store = get_vector_store(settings, collection_name=repo_id)
         vec_cache = storage_dir / f"{repo_id}.vectors.pkl"
         if vec_cache.exists() and vector_store.count() == 0:

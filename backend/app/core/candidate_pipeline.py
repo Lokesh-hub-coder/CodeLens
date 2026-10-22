@@ -19,6 +19,7 @@ scorer.py never has to touch the filesystem.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from app.acor.scorer import Candidate
 from app.config import Settings
@@ -30,20 +31,26 @@ from app.retrieval.tokenizer import count_tokens
 from app.api.schemas import QueryIntentLabel
 
 
-def _read_snippet_safe(repo_root: Path, file_path: str, start: int, end: int, name: str = "") -> str:
-    """Read source lines [start, end] inclusive; return summary fallback if file is moved."""
+def _read_snippet_safe(
+    repo_root: Path, file_path: str, start: int, end: int
+) -> str | None:
+    """Read source lines [start, end] inclusive, dropping unreadable candidates."""
     try:
         from app.parsing.repo_walker import read_snippet
         content = read_snippet(repo_root / file_path, start, end)
         if content:
             return content
-    except Exception:
-        pass
-    return f"// Method: {name or file_path}\n// File: {file_path} (lines {start}-{end})"
+        reason = "snippet was empty"
+    except Exception as exc:
+        reason = str(exc) or type(exc).__name__
+    print(
+        f"Dropping candidate snippet for '{repo_root / file_path}': {reason}",
+        file=sys.stderr,
+    )
+    return None
 
 
 def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
-    snip = snippet or f"// Method: {meta.get('name', '')}\n// File: {meta.get('file_path', '')} (lines {meta.get('start_line', 0)}-{meta.get('end_line', 0)})"
     return Candidate(
         method_id=meta["method_id"],
         class_id=meta["class_id"],
@@ -52,8 +59,8 @@ def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
         file_path=meta["file_path"],
         start_line=meta["start_line"],
         end_line=meta["end_line"],
-        snippet=snip,
-        token_count=max(count_tokens(snip), 5),
+        snippet=snippet,
+        token_count=max(count_tokens(snippet), 5),
         raw_semantic_score=meta.get("_score", 0.0),
     )
 
@@ -108,6 +115,7 @@ def generate_root_cause_candidates(
     """
     repo_root = repo_index.repo_root
     candidates: dict[str, Candidate] = {}
+    failed_snippets = 0
 
     # Step 1: semantic search
     q_vec   = embedding_model.encode_one(query.raw_query)
@@ -116,6 +124,9 @@ def generate_root_cause_candidates(
     for sr in results:
         meta    = sr.metadata
         snippet = _read_snippet_safe(repo_root, meta["file_path"], meta["start_line"], meta["end_line"])
+        if snippet is None:
+            failed_snippets += 1
+            continue
         meta["_score"] = float(sr.score)
         candidates[meta["method_id"]] = _meta_to_candidate(meta, snippet)
 
@@ -135,6 +146,9 @@ def generate_root_cause_candidates(
                 for nloc in neighbor_locs:
                     if nloc.symbol_id == mid:
                         snippet = _read_snippet_safe(repo_root, nloc.file_path, nloc.start_line, nloc.end_line)
+                        if snippet is None:
+                            failed_snippets += 1
+                            break
                         class_id = mid.split("#")[0] if "#" in mid else ""
                         candidates[mid] = Candidate(
                             method_id=mid,
@@ -145,11 +159,13 @@ def generate_root_cause_candidates(
                             start_line=nloc.start_line,
                             end_line=nloc.end_line,
                             snippet=snippet,
-                            token_count=count_tokens(snippet) if snippet else 1,
+                            token_count=count_tokens(snippet),
                             raw_semantic_score=0.0,  # graph-expansion candidates have no semantic score
                         )
                         break
 
+    if failed_snippets and not candidates:
+        raise RuntimeError("All retrieved candidates were dropped because their snippets could not be read.")
     return list(candidates.values())
 
 
@@ -173,6 +189,7 @@ def generate_change_impact_candidates(
     """
     repo_root = repo_index.repo_root
     candidates: dict[str, Candidate] = {}
+    failed_snippets = 0
 
     # Step 1+2: resolve symbol -> directed reverse BFS (callers)
     locs = repo_index.symbol_index.exact_lookup(changed_symbol)
@@ -188,6 +205,9 @@ def generate_change_impact_candidates(
             for nloc in nlocs:
                 if nloc.symbol_id == mid:
                     snippet = _read_snippet_safe(repo_root, nloc.file_path, nloc.start_line, nloc.end_line)
+                    if snippet is None:
+                        failed_snippets += 1
+                        break
                     class_id = mid.split("#")[0] if "#" in mid else ""
                     candidates[mid] = Candidate(
                         method_id=mid,
@@ -198,7 +218,7 @@ def generate_change_impact_candidates(
                         start_line=nloc.start_line,
                         end_line=nloc.end_line,
                         snippet=snippet,
-                        token_count=count_tokens(snippet) if snippet else 1,
+                        token_count=count_tokens(snippet),
                         raw_semantic_score=0.0,
                     )
                     break
@@ -216,9 +236,14 @@ def generate_change_impact_candidates(
             )
             continue
         snippet = _read_snippet_safe(repo_root, meta["file_path"], meta["start_line"], meta["end_line"])
+        if snippet is None:
+            failed_snippets += 1
+            continue
         meta["_score"] = float(sr.score)
         candidates[mid] = _meta_to_candidate(meta, snippet)
 
+    if failed_snippets and not candidates:
+        raise RuntimeError("All retrieved candidates were dropped because their snippets could not be read.")
     return list(candidates.values())
 
 

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     java_parser_jar_path: Path = _DEFAULT_JAR
     java_bin: str = "java"
     parser_timeout_seconds: int = 120
+    exclude_test_sources: bool = True
 
     # Embeddings
     embedding_backend: str = "fastembed"  # "fastembed" | "sentence_transformers"

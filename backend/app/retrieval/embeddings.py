@@ -36,8 +36,13 @@ class EmbeddingModel:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
         if self.backend == "fastembed":
-            embeddings = list(self.model.embed(texts))
-            arr = np.array(embeddings, dtype=np.float32)
+            batch_size = 64
+            all_embeddings = []
+            for i in range(0, len(texts), batch_size):
+                chunk = texts[i : i + batch_size]
+                chunk_embeds = list(self.model.embed(chunk, batch_size=len(chunk)))
+                all_embeddings.extend(chunk_embeds)
+            arr = np.array(all_embeddings, dtype=np.float32)
             # L2 normalize
             norms = np.linalg.norm(arr, axis=1, keepdims=True)
             norms[norms == 0] = 1.0

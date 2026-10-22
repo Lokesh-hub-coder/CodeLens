@@ -112,10 +112,22 @@ def rank_and_select(
         or len(candidates) <= settings.exact_knapsack_max_candidates
         and settings.ranker_strategy != "greedy"
     )
+    # Prioritize top-scoring primary target candidates
+    sorted_by_composite = sorted(candidates, key=lambda c: c.score.composite, reverse=True)
+    must_have: set[str] = set()
+    budget_for_rest = token_budget
+    if sorted_by_composite and sorted_by_composite[0].score.composite >= 0.8:
+        primary = sorted_by_composite[0]
+        if primary.token_count <= token_budget:
+            must_have.add(primary.method_id)
+            budget_for_rest -= primary.token_count
+
+    pool = [c for c in candidates if c.method_id not in must_have]
+
     if settings.ranker_strategy == "exact":
-        selected_ids = _exact_knapsack(candidates, token_budget)
+        selected_ids = _exact_knapsack(pool, budget_for_rest) | must_have
     else:
-        selected_ids = _greedy_by_density(candidates, token_budget)
+        selected_ids = _greedy_by_density(pool, budget_for_rest) | must_have
 
     selected = sorted(
         [c for c in candidates if c.method_id in selected_ids],

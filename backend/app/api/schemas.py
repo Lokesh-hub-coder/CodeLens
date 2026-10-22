@@ -67,6 +67,10 @@ class QueryResponse(BaseModel):
     naive_baseline_tokens: int
     retrieval_latency_ms:  float
     llm_latency_ms:        float
+    # LLM token cost breakdown (Groq usage API fields)
+    llm_prompt_tokens:     Optional[int] = None   # input tokens billed
+    llm_completion_tokens: Optional[int] = None   # output tokens billed
+    llm_total_tokens:      Optional[int] = None   # prompt + completion = cost basis
 
 
 class RepositoryStatusResponse(BaseModel):

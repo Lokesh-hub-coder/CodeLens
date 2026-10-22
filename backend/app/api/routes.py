@@ -34,6 +34,7 @@ from app.llm.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.llm.providers import get_llm_client
 from app.parsing.java_bridge import parse_repository
 from app.parsing.repo_walker import compute_repo_fingerprint, read_snippet
+from app.parsing.source_filter import filter_test_sources
 from app.retrieval.embeddings import get_embedding_model
 from app.retrieval.query_understanding import analyze_query
 from app.retrieval.tokenizer import count_tokens
@@ -109,6 +110,8 @@ async def index_repository(
 
     # Parse
     parsed = parse_repository(repo_path, settings)
+    if settings.exclude_test_sources:
+        parsed = filter_test_sources(parsed)
 
     if len(parsed.methods) == 0:
         # If directory has no java files, check if a valid saved index already exists
@@ -141,6 +144,8 @@ async def index_repository(
     # Embed methods and populate vector store
     embedding_model = get_embedding_model(settings)
     vector_store    = get_vector_store(settings, collection_name=repo_id)
+    if request.force_reindex:
+        vector_store.clear()
 
     snippets  = []
     ids       = []
@@ -182,7 +187,7 @@ async def index_repository(
     num_files = len({m.file_path for m in parsed.methods})
     repo_index = RepoIndex(
         repo_id=repo_id,
-        repo_root=repo_path,
+        repo_root=repo_path.resolve(),
         fingerprint=fingerprint,
         call_graph=call_graph,
         dependency_graph=dependency_graph,
