@@ -1,189 +1,222 @@
 # CodeLens
 
-**Adaptive Context Optimization for Repository-Scale AI Code Understanding**
+CodeLens indexes Java repositories and retrieves a token-budgeted code
+excerpt for root-cause and change-impact questions. ACOR ranks methods
+using semantic similarity, symbol matching, call-graph proximity, and
+dependency-graph proximity. This is an actively tested prototype, not a
+production-ready service.
 
-CodeLens takes a natural-language developer query about a large Java
-repository (a bug report, "why does X fail," "where is Y implemented") and
-builds the smallest, most relevant slice of the repository's actual source
--- under a hard token budget -- before handing it to an LLM for bug
-explanation, root-cause analysis, or a suggested fix. The core contribution
-is **ACOR (Adaptive Context Optimization and Ranking)**: a scoring and
-budget-constrained selection algorithm that fuses semantic similarity with
-call-graph proximity, dependency-graph proximity, and symbol matching,
-instead of relying on embedding similarity alone.
+## Verified components
 
-This repository is a working scaffold, not a finished product: every
-pipeline stage is implemented with real logic (not stubs), but a handful
-of MVP simplifications are deliberately called out in
-[`docs/architecture.md`](docs/architecture.md) rather than hidden, since
-knowing exactly what's simplified -- and why -- is what turns this from
-"AI-generated boilerplate" into something you can defend in a viva.
+- Java parsing is delegated to the JavaParser CLI under `parser-service/`.
+- FastEmbed generates method vectors; Qdrant is the only supported vector
+  store (local embedded storage by default, remote Qdrant with URL/key).
+- ACOR scores and deduplicates candidates. The final formatted excerpt,
+  including file and method headers, is recounted and kept within its
+  configured context-token budget.
+- Watchdog observes indexed repositories. A debounced change triggers a
+  full Java repository reparse so cross-file method resolution, vectors,
+  symbol indexes, call/dependency graphs, and persisted counts are rebuilt.
+- The MCP stdio server exposes `codelens_root_cause` and
+  `codelens_change_impact`, plus a read-only `codelens_graph_inspect` tool.
+  The query tools return the compatible text `answer` field alongside
+  validated structured answers, selected-source evidence, and metrics.
+  The tools have been exercised through a spawned MCP Python SDK stdio
+  client/server test; actual IDE-specific setup has not been tested here.
+- `GET /repositories/{repo_id}/status` checks the active server's index
+  visibility. `GET /repositories/{repo_id}/graph` reports graph counts and
+  bounded edges around a symbol. See
+  [`docs/MCP_SERVER_SETUP.md`](docs/MCP_SERVER_SETUP.md) for the Swagger
+  "repository not indexed" diagnostic.
+- The labeled-task research runner compares whole-file, semantic-only, and
+  ACOR retrieval. No empirical benchmark results are claimed; see
+  [`docs/evaluation.md`](docs/evaluation.md).
 
-## Start here
+## Prerequisites
 
-- [`docs/architecture.md`](docs/architecture.md) -- how every module maps
-  to the pipeline diagram, and the explicit list of MVP simplifications
-  with their upgrade paths.
-- [`docs/ACOR_algorithm.md`](docs/ACOR_algorithm.md) -- the scoring
-  formula, the knapsack-based ranker, and a detailed positioning of ACOR
-  against all six papers in the original synopsis plus two closely
-  related papers (RepoHyper, GraphCoder) worth reading before your
-  literature review is finalized.
-
-## Repository layout
-
-```
-codelens-ai/
-├── backend/                  FastAPI service -- the pipeline orchestrator
-│   ├── app/
-│   │   ├── main.py           App factory, CORS, health check
-│   │   ├── config.py         All tunables (ACOR weights, budget, model choice) in one place
-│   │   ├── api/               Request/response schemas + route handlers
-│   │   ├── parsing/           Repo file walking + the subprocess bridge to parser-service
-│   │   ├── graphs/             Call graph, dependency graph, symbol index
-│   │   ├── retrieval/          Embeddings, vector store (FAISS/Chroma), query understanding
-│   │   ├── acor/                scorer.py -> ranker.py -> context_builder.py -- the core algorithm
-│   │   ├── llm/                 Provider-agnostic client (OpenAI/Llama/Qwen) + prompt templates
-│   │   └── evaluation/          Precision/recall, token-reduction, latency metrics
-│   ├── tests/                  pytest unit tests (call graph, scorer, ranker)
-│   ├── requirements.txt
-│   └── Dockerfile
-├── parser-service/           JavaParser-based CLI (JVM) -- the actual AST/symbol resolution
-│   ├── pom.xml
-│   └── src/main/java/com/codelensai/parser/
-│       ├── ParserApplication.java   CLI entry point
-│       ├── RepoParser.java          AST walk, call/import edge extraction
-│       └── model/CodeEntities.java  JSON output model (contract with java_bridge.py)
-├── frontend/                 React + Vite developer console
-│   └── src/
-│       ├── App.jsx
-│       ├── api.js
-│       └── components/{QueryPanel,ContextViewer}.jsx
-├── docs/
-│   ├── architecture.md
-│   └── ACOR_algorithm.md
-├── scripts/
-│   └── index_repository.py   CLI smoke-test against a running backend
-├── docker-compose.yml
-├── .env.example
-└── .gitignore
-```
+- Python 3.12 (the dependency versions below were exercised with Python
+  3.12).
+- JDK 17 and Maven for building the parser service.
+- Node.js only if you want the React frontend.
 
 ## Setup
 
-### 1. Backend
+From the repository root, create and activate a backend environment and
+install dependencies:
 
-```bash
+```powershell
 cd backend
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp ../.env.example ../.env   # then edit ../.env -- at minimum set an LLM API key
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-### 2. Parser service (build once, or whenever RepoParser.java changes)
+Create a local backend configuration. The example contains no credentials:
 
-```bash
-cd parser-service
-mvn -q package
-# produces target/parser-service-1.0.0.jar -- path referenced by
-# JAVA_PARSER_JAR_PATH in .env
+```powershell
+Copy-Item ..\.env.example .env
 ```
 
-### 3. Run the backend
+Set `GROQ_API_KEY` (or configure another supported LLM provider) for live
+answers. Without credentials, interactive queries use an offline demo
+response; the research benchmark refuses to treat that mock as a real
+model. Local Qdrant storage requires no account. For Qdrant Cloud, set
+`QDRANT_URL` and `QDRANT_API_KEY`.
 
-```bash
-cd backend
-uvicorn app.main:app --reload
-# interactive API docs at http://localhost:8000/docs
+Build the parser JAR from the repository root:
+
+```powershell
+mvn -f parser-service\pom.xml -q package
 ```
 
-### 4. Frontend
+The default parser JAR path is
+`parser-service/target/parser-service-1.0.0.jar`. Start the backend from
+`backend/`:
 
-```bash
+```powershell
+python -m uvicorn app.main:app --reload
+```
+
+The API docs are available at `http://localhost:8000/docs`. Index a Java
+repository with the API or the CLI:
+
+```powershell
+python ..\scripts\index_repository.py --repo C:\path\to\java-repository --query "Why does parseAmount fail?"
+```
+
+`EXCLUDE_TEST_SOURCES` defaults to `true`; set it to `false` to include
+test-source files. Index data and Qdrant files are written under the
+configured runtime data directories and are not source-controlled.
+
+Swagger's query URL must use the exact `repo_id` returned by indexing.
+Before reindexing after a "not indexed" response, call
+`GET /repositories/{repo_id}/status` on the same running server and confirm
+its working directory is `backend/` or that `INDEX_STORAGE_DIR` points to
+the intended index directory.
+
+To run the frontend, in a separate terminal:
+
+```powershell
 cd frontend
 npm install
 npm run dev
-# http://localhost:5173
 ```
 
-### 5. Or all at once with Docker Compose
+### Docker Compose development setup
 
-```bash
+Compose is a local development setup, not a production deployment. Build
+the parser JAR first, then create the root Compose environment file and
+start the services:
+
+```powershell
+mvn -f parser-service\pom.xml -q package
+Copy-Item .env.example .env
 docker compose up --build
 ```
 
-### 6. Smoke-test without the frontend
+Set a real provider key in the root `.env` for model-backed answers. Put
+Java repositories to index under `data\repos` so the backend container can
+read them; submit their container-visible paths (for example,
+`/data/repos/sample`) to the API. Compose persists local Qdrant and index
+data under `data\`. The frontend service runs the development server.
 
-```bash
-python scripts/index_repository.py --repo /path/to/some/java/repo \
-  --query "why does processOrder throw a NullPointerException when the cart is empty?"
+## Live sync
+
+After a successful index request, a background watcher starts for that
+repository. Create, modify, rename, and delete events for Java files are
+debounced (`LIVE_SYNC_DEBOUNCE_SECONDS`, default `0.4`) and trigger a
+repository-wide reparse. This favors graph and symbol correctness over
+incremental speed. A failed parse is logged and leaves the previous
+in-memory graphs and symbol index intact; retry by making another change
+or re-indexing. The watcher is process-local and is not a multi-worker
+coordination mechanism.
+
+## MCP tools
+
+The MCP server runs over stdio. Configure an MCP-capable editor to launch
+Python with working directory `backend/` and arguments
+`-m app.mcp.server`. For VS Code, for example, add an MCP server entry to
+`.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "codelens": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "args": ["-m", "app.mcp.server"],
+      "cwd": "${workspaceFolder}/backend"
+    }
+  }
+}
 ```
 
-### Run the tests
+Index the repository through the HTTP API before calling an MCP tool. The
+server uses the same backend `.env`, Qdrant collection, and index storage
+settings. MCP tools are `codelens_root_cause`,
+`codelens_change_impact`, and `codelens_graph_inspect`.
 
-```bash
-cd backend
-pytest -v
+## Tests
+
+Run the backend tests from `backend/`:
+
+```powershell
+python -m pytest tests -q
 ```
 
-**A note on this sandbox's build verification:** every Python file in this
-scaffold was syntax-checked (`python -m py_compile`) and the core
-algorithms (knapsack ranker, graph proximity decay, camelCase symbol
-tokenization) were independently verified against hand-built test cases
-during development -- but this environment had no network access, so
-`pip install`, `npm install`, and `mvn package` have **not** actually been
-run end-to-end here. Budget time in Week 5 for a first real build to catch
-anything a static read-through can't (dependency version conflicts,
-JavaParser API drift, etc.) -- see "What to think about beyond the papers"
-below.
+The regression suite covers scoring/ranking, rendered token limits,
+Qdrant record removal, live-sync graph/vector updates and failures,
+configuration validation, and both MCP tools over an MCP client/server
+transport. Parser-JAR and real-provider integration still require the
+external Java/model setup described above.
 
-## Configuration
+## Research evaluation
 
-Every tunable lives in `.env` (see `.env.example` for the full list with
-comments): token budget, ACOR component weights, graph hop limit, ranker
-strategy, embedding model, vector store backend, and LLM provider/model.
-Nothing pipeline-relevant is hardcoded in application code.
+The checked-in Defects4J Apache Commons Lang pilot includes five
+patch-anchored bug-localization tasks with revision-specific repository
+indexes. See [`docs/evaluation.md`](docs/evaluation.md) for the reproducible
+checkout/index commands and task provenance. Run a retrieval-only
+measurement without contacting a model:
 
-## Suggested build order (mapping onto a typical Week 5-14 timeline)
+```powershell
+python ..\scripts\evaluate_retrieval.py --tasks ..\benchmarks\commons-lang-defects4j.json --retrieval-only --include-ablations
+```
 
-1. **Parser service first, in isolation.** Get `mvn package` producing a
-   JAR, and run it by hand against a small real Java repo (2-3 classes) to
-   sanity-check the output JSON before wiring up anything else. This is
-   the module most likely to need iteration against real-world code (see
-   below).
-2. **Indexing endpoint end to end** against that same small repo:
-   `/repositories/index` should return sane class/method/edge counts.
-3. **Query endpoint with a trivial query** ("what does OrderService do")
-   to validate the ACOR -> LLM handoff before tuning weights.
-4. **Frontend** once the API is stable -- it's a thin client and shouldn't
-   block backend iteration.
-5. **Evaluation harness** (Section 7 of the synopsis) once the pipeline is
-   stable enough to produce consistent results to measure.
+For model predictions, use the full-run command in the evaluation guide
+only when an authorized provider may receive the task prompts and retrieved
+source. The runner records real provider usage separately from estimates;
+it does not treat estimates or mock output as model benchmark evidence.
 
-## What to think about beyond the six papers
+## Secrets and release archives
 
-The full write-up is in the chat response this project was generated
-from, but the short version, roughly in the order you'll hit it:
+Keep local credentials in an ignored `.env` file. `.gitignore` excludes
+environment and key files, and `.gitattributes` plus the release script
+exclude them from committed-source archives. Check a release ZIP with:
 
-1. **JavaParser will fail on some real-world files** -- generics edge
-   cases, unresolvable third-party dependencies not on any configured
-   classpath, annotation processors, very new language features. The
-   `unparsed_files` field exists precisely so a handful of bad files
-   degrade gracefully instead of failing the whole index. Budget time to
-   look at *which* files fail on your actual test repositories.
-2. **Where your evaluation ground truth comes from** is a decision, not a
-   given -- see `docs/ACOR_algorithm.md` section 6.
-3. **Token counting is a proxy, not an exact bill** for non-OpenAI
-   providers -- see `acor/tokenizer.py`'s docstring.
-4. **Privacy/licensing** if you test against real open-source repositories
-   and send excerpts to a third-party LLM API -- check the repo's license
-   and, if this ever handles proprietary code, whether the LLM provider's
-   data-retention policy is acceptable.
-5. **Cost**, if using a paid API for evaluation at scale -- budget it
-   before running a 200-query evaluation sweep against GPT-4-class models.
-6. **Latency vs. quality** -- the exact-knapsack ranker, larger
-   `top_k_candidates`, and larger embedding models all trade speed for
-   possible quality; report where you landed and why.
+```powershell
+python scripts\create_release_zip.py
+```
 
+The script archives `HEAD` only, refuses to overwrite an existing output,
+and fails if sensitive paths or probable secret values are present. Review
+the resulting file before publishing.
 
+## Limitations
 
+- Parsing is Java-focused and reparses the full repository after a Java
+  file event. JavaParser may not resolve project-specific dependencies
+  without their build classpath.
+- The vector/index registry is process-local; multi-worker deployments
+  need shared coordination and storage.
+- The context budget limits the formatted repository excerpt, not the
+  system prompt or developer query. `tiktoken` counts are a proxy for
+  providers that do not report usage.
+- The API has no authentication and should not be exposed to untrusted
+  networks. Treat indexed source, local index pickles, and LLM-provider
+  data handling as sensitive.
+- No benchmark numbers, live IDE validation, or production-readiness
+  claim is made by this repository.
+
+For implementation details, see
+[`docs/architecture.md`](docs/architecture.md) and
+[`docs/ACOR_algorithm.md`](docs/ACOR_algorithm.md).

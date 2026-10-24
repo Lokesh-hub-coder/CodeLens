@@ -19,31 +19,38 @@ scorer.py never has to touch the filesystem.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from app.acor.scorer import Candidate
 from app.config import Settings
 from app.core.repo_index import RepoIndex
-from app.graphs.symbol_index import SymbolKind
+from app.graphs.symbol_index import SymbolKind, tokenize_identifier
 from app.retrieval.embeddings import EmbeddingModel
 from app.retrieval.query_understanding import QueryAnalysis, analyze_query
 from app.retrieval.tokenizer import count_tokens
 from app.api.schemas import QueryIntentLabel
 
 
-def _read_snippet_safe(repo_root: Path, file_path: str, start: int, end: int, name: str = "") -> str:
-    """Read source lines [start, end] inclusive; return summary fallback if file is moved."""
+def _read_snippet_safe(
+    repo_root: Path, file_path: str, start: int, end: int
+) -> str | None:
+    """Read source lines [start, end] inclusive, dropping unreadable candidates."""
     try:
         from app.parsing.repo_walker import read_snippet
         content = read_snippet(repo_root / file_path, start, end)
         if content:
             return content
-    except Exception:
-        pass
-    return f"// Method: {name or file_path}\n// File: {file_path} (lines {start}-{end})"
+        reason = "snippet was empty"
+    except Exception as exc:
+        reason = str(exc) or type(exc).__name__
+    print(
+        f"Dropping candidate snippet for '{repo_root / file_path}': {reason}",
+        file=sys.stderr,
+    )
+    return None
 
 
 def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
-    snip = snippet or f"// Method: {meta.get('name', '')}\n// File: {meta.get('file_path', '')} (lines {meta.get('start_line', 0)}-{meta.get('end_line', 0)})"
     return Candidate(
         method_id=meta["method_id"],
         class_id=meta["class_id"],
@@ -52,8 +59,8 @@ def _meta_to_candidate(meta: dict, snippet: str) -> Candidate:
         file_path=meta["file_path"],
         start_line=meta["start_line"],
         end_line=meta["end_line"],
-        snippet=snip,
-        token_count=max(count_tokens(snip), 5),
+        snippet=snippet,
+        token_count=max(count_tokens(snippet), 5),
         raw_semantic_score=meta.get("_score", 0.0),
     )
 
@@ -71,6 +78,8 @@ def _build_candidate_map(
         for loc in locs:
             if loc.symbol_id == mid and loc.kind == SymbolKind.METHOD:
                 snippet = _read_snippet_safe(repo_root, loc.file_path, loc.start_line, loc.end_line)
+                if snippet is None:
+                    break
                 class_id = mid.split("#")[0] if "#" in mid else ""
                 candidates[mid] = Candidate(
                     method_id=mid,
@@ -86,6 +95,50 @@ def _build_candidate_map(
                 )
                 break
     return candidates
+
+
+def _class_anchor_method_ids(
+    query: QueryAnalysis,
+    repo_index: RepoIndex,
+) -> tuple[set[str], set[str]]:
+    """Resolve class anchors to their methods and nearby class implementations."""
+    anchor_class_ids: set[str] = set()
+    related_class_ids: set[str] = set()
+
+    for anchor in query.anchor_symbols:
+        for location in repo_index.symbol_index.exact_lookup(anchor):
+            if location.kind != SymbolKind.CLASS:
+                continue
+            anchor_class_ids.add(location.symbol_id)
+            related_class_ids.add(location.symbol_id)
+
+            anchor_tokens = tokenize_identifier(location.name)
+            package = location.symbol_id.rpartition(".")[0]
+            for class_id, attributes in repo_index.dependency_graph.graph.nodes(data=True):
+                if attributes.get("package") != package:
+                    continue
+                class_tokens = tokenize_identifier(
+                    attributes.get("name", class_id.rpartition(".")[2])
+                )
+                if len(anchor_tokens & class_tokens) >= 2:
+                    related_class_ids.add(class_id)
+
+    method_ids: set[str] = set()
+    anchor_method_ids: set[str] = set()
+    for method_id, attributes in repo_index.call_graph.graph.nodes(data=True):
+        class_id = attributes.get("class_id", "")
+        if any(
+            class_id == related_id or class_id.startswith(related_id + ".")
+            for related_id in related_class_ids
+        ):
+            method_ids.add(method_id)
+        if any(
+            class_id == anchor_id or class_id.startswith(anchor_id + ".")
+            for anchor_id in anchor_class_ids
+        ):
+            anchor_method_ids.add(method_id)
+
+    return method_ids, anchor_method_ids
 
 
 # ---------------------------------------------------------------------------
@@ -108,48 +161,89 @@ def generate_root_cause_candidates(
     """
     repo_root = repo_index.repo_root
     candidates: dict[str, Candidate] = {}
+    failed_snippets = 0
 
     # Step 1: semantic search
     q_vec   = embedding_model.encode_one(query.raw_query)
-    results = repo_index.vector_store.search(q_vec, top_k=settings.top_k_candidates)
+    class_method_ids, anchor_class_method_ids = _class_anchor_method_ids(
+        query, repo_index
+    )
+    semantic_top_k = settings.top_k_candidates * (2 if class_method_ids else 1)
+    results = repo_index.vector_store.search(q_vec, top_k=semantic_top_k)
+    semantic_candidate_ids: set[str] = set()
 
-    for sr in results:
+    for rank, sr in enumerate(results, start=1):
         meta    = sr.metadata
+        if (
+            rank > settings.top_k_candidates
+            and meta["method_id"] not in class_method_ids
+        ):
+            continue
         snippet = _read_snippet_safe(repo_root, meta["file_path"], meta["start_line"], meta["end_line"])
+        if snippet is None:
+            failed_snippets += 1
+            continue
         meta["_score"] = float(sr.score)
         candidates[meta["method_id"]] = _meta_to_candidate(meta, snippet)
+        semantic_candidate_ids.add(meta["method_id"])
 
-    # Step 2: call-graph expansion from anchor symbols (hop_limit=2 for root-cause)
+    # Step 2: expand named classes to their own and similarly named,
+    # same-package implementation classes. This catches nested helpers such as
+    # FastDatePrinter.TimeZoneNameRule when a query names FastDateFormat.
+    candidates.update(
+        {
+            method_id: candidate
+            for method_id, candidate in _build_candidate_map(
+                repo_index, class_method_ids, repo_root
+            ).items()
+            if method_id not in candidates
+        }
+    )
+
+    # Step 3: expand method anchors and methods declared by named classes via
+    # the call graph. Class methods use a bounded one-hop expansion; explicit
+    # method anchors retain the existing two-hop behavior.
+    class_expansion_seeds = set(anchor_class_method_ids)
+    if len(class_expansion_seeds) > 5:
+        class_expansion_seeds.clear()
+        semantic_class_seeds = sorted(
+            (
+                method_id
+                for method_id in anchor_class_method_ids & semantic_candidate_ids
+            ),
+            key=lambda method_id: candidates[method_id].raw_semantic_score,
+            reverse=True,
+        )
+        class_expansion_seeds.update(semantic_class_seeds[:2])
+    method_expansion_seeds: set[str] = set()
     for anchor in query.anchor_symbols:
         locs = repo_index.symbol_index.exact_lookup(anchor)
         for loc in locs:
             if loc.kind != SymbolKind.METHOD:
                 continue
-            neighbors = repo_index.call_graph.neighbors_within_hops(loc.symbol_id, max_hops=2)
-            for mid in neighbors:
-                if mid in candidates:
-                    continue
-                # Look up metadata from symbol index
-                name = mid.split("#")[1].split("(")[0] if "#" in mid else mid
-                neighbor_locs = repo_index.symbol_index.exact_lookup(name)
-                for nloc in neighbor_locs:
-                    if nloc.symbol_id == mid:
-                        snippet = _read_snippet_safe(repo_root, nloc.file_path, nloc.start_line, nloc.end_line)
-                        class_id = mid.split("#")[0] if "#" in mid else ""
-                        candidates[mid] = Candidate(
-                            method_id=mid,
-                            class_id=class_id,
-                            name=nloc.name,
-                            kind="method",
-                            file_path=nloc.file_path,
-                            start_line=nloc.start_line,
-                            end_line=nloc.end_line,
-                            snippet=snippet,
-                            token_count=count_tokens(snippet) if snippet else 1,
-                            raw_semantic_score=0.0,  # graph-expansion candidates have no semantic score
-                        )
-                        break
+            method_expansion_seeds.add(loc.symbol_id)
 
+    graph_method_ids: set[str] = set()
+    for method_id in class_expansion_seeds:
+        graph_method_ids.update(
+            repo_index.call_graph.neighbors_within_hops(method_id, max_hops=1)
+        )
+    for method_id in method_expansion_seeds:
+        graph_method_ids.update(
+            repo_index.call_graph.neighbors_within_hops(method_id, max_hops=2)
+        )
+    candidates.update(
+        {
+            method_id: candidate
+            for method_id, candidate in _build_candidate_map(
+                repo_index, graph_method_ids, repo_root
+            ).items()
+            if method_id not in candidates
+        }
+    )
+
+    if failed_snippets and not candidates:
+        raise RuntimeError("All retrieved candidates were dropped because their snippets could not be read.")
     return list(candidates.values())
 
 
@@ -173,6 +267,7 @@ def generate_change_impact_candidates(
     """
     repo_root = repo_index.repo_root
     candidates: dict[str, Candidate] = {}
+    failed_snippets = 0
 
     # Step 1+2: resolve symbol -> directed reverse BFS (callers)
     locs = repo_index.symbol_index.exact_lookup(changed_symbol)
@@ -188,6 +283,9 @@ def generate_change_impact_candidates(
             for nloc in nlocs:
                 if nloc.symbol_id == mid:
                     snippet = _read_snippet_safe(repo_root, nloc.file_path, nloc.start_line, nloc.end_line)
+                    if snippet is None:
+                        failed_snippets += 1
+                        break
                     class_id = mid.split("#")[0] if "#" in mid else ""
                     candidates[mid] = Candidate(
                         method_id=mid,
@@ -198,7 +296,7 @@ def generate_change_impact_candidates(
                         start_line=nloc.start_line,
                         end_line=nloc.end_line,
                         snippet=snippet,
-                        token_count=count_tokens(snippet) if snippet else 1,
+                        token_count=count_tokens(snippet),
                         raw_semantic_score=0.0,
                     )
                     break
@@ -216,9 +314,14 @@ def generate_change_impact_candidates(
             )
             continue
         snippet = _read_snippet_safe(repo_root, meta["file_path"], meta["start_line"], meta["end_line"])
+        if snippet is None:
+            failed_snippets += 1
+            continue
         meta["_score"] = float(sr.score)
         candidates[mid] = _meta_to_candidate(meta, snippet)
 
+    if failed_snippets and not candidates:
+        raise RuntimeError("All retrieved candidates were dropped because their snippets could not be read.")
     return list(candidates.values())
 
 

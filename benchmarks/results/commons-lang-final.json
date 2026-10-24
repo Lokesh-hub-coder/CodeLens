@@ -1,0 +1,314 @@
+{
+  "report_version": 1,
+  "provider": "groq",
+  "primary_model": "openai/gpt-oss-120b",
+  "models_used": [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b"
+  ],
+  "context_token_budget_estimate": 5000,
+  "tasks": [
+    "defects4j-Lang-1-LANG-747",
+    "defects4j-Lang-3-LANG-693",
+    "defects4j-Lang-5-LANG-865",
+    "defects4j-Lang-6-LANG-857",
+    "defects4j-Lang-8-LANG-818"
+  ],
+  "expected_condition_rows": 45,
+  "completed_condition_rows": 45,
+  "failed_condition_rows": 0,
+  "conditions": {
+    "whole_file": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 5
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.4,
+        "bug_localization_retrieval_recall_at_10": 0.4,
+        "bug_localization_retrieval_mrr": 0.26666666666666666
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4985.0,
+      "mean_estimated_input_tokens": 4814.6,
+      "actual_token_reduction_vs_whole_file": 0.0,
+      "mean_provider_latency_ms": 1901.6339200083166,
+      "mean_retrieval_latency_ms": 1189.0485200099647,
+      "actual_input_budget_overruns": 2,
+      "actual_input_tokens_max": 5136,
+      "llm_latency_samples": 5
+    },
+    "semantic_only": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 5
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.0,
+        "bug_localization_retrieval_recall_at_1": 0.0,
+        "bug_localization_retrieval_recall_at_5": 0.0,
+        "bug_localization_retrieval_recall_at_10": 0.0,
+        "bug_localization_retrieval_mrr": 0.0
+      },
+      "model_bug_localization_hit_rate": 0.0,
+      "model_bug_localization_exact_set_accuracy": 0.0,
+      "mean_actual_provider_input_tokens": 4396.4,
+      "mean_estimated_input_tokens": 4212.0,
+      "actual_token_reduction_vs_whole_file": 0.11875165204686426,
+      "mean_provider_latency_ms": 2021.655940002529,
+      "mean_retrieval_latency_ms": 57.225439994363114,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4701,
+      "llm_latency_samples": 5
+    },
+    "acor": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 5
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.2,
+        "bug_localization_retrieval_recall_at_10": 0.2,
+        "bug_localization_retrieval_mrr": 0.21818181818181817
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4408.2,
+      "mean_estimated_input_tokens": 4219.2,
+      "actual_token_reduction_vs_whole_file": 0.11688085545075744,
+      "mean_provider_latency_ms": 2624.941679998301,
+      "mean_retrieval_latency_ms": 88.81205999641679,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4829,
+      "llm_latency_samples": 5
+    },
+    "acor_no_semantic": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.6,
+        "bug_localization_retrieval_recall_at_1": 0.4,
+        "bug_localization_retrieval_recall_at_5": 0.6,
+        "bug_localization_retrieval_recall_at_10": 0.6,
+        "bug_localization_retrieval_mrr": 0.45
+      },
+      "model_bug_localization_hit_rate": 0.6,
+      "model_bug_localization_exact_set_accuracy": 0.6,
+      "mean_actual_provider_input_tokens": 4837.6,
+      "mean_estimated_input_tokens": 4569.0,
+      "actual_token_reduction_vs_whole_file": 0.02940759166821232,
+      "mean_provider_latency_ms": 2549.1394000069704,
+      "mean_retrieval_latency_ms": 84.45506000425667,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4901,
+      "llm_latency_samples": 5
+    },
+    "acor_no_symbol": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.2,
+        "bug_localization_retrieval_recall_at_10": 0.2,
+        "bug_localization_retrieval_mrr": 0.21818181818181817
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4685.2,
+      "mean_estimated_input_tokens": 4408.6,
+      "actual_token_reduction_vs_whole_file": 0.06054391297996224,
+      "mean_provider_latency_ms": 2190.235140011646,
+      "mean_retrieval_latency_ms": 121.82966000400484,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4946,
+      "llm_latency_samples": 5
+    },
+    "acor_no_call_graph": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.2,
+        "bug_localization_retrieval_recall_at_10": 0.2,
+        "bug_localization_retrieval_mrr": 0.21818181818181817
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4569.6,
+      "mean_estimated_input_tokens": 4307.2,
+      "actual_token_reduction_vs_whole_file": 0.08389648723538619,
+      "mean_provider_latency_ms": 2273.5739399970043,
+      "mean_retrieval_latency_ms": 98.56518001179211,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4829,
+      "llm_latency_samples": 5
+    },
+    "acor_no_dependency": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.2,
+        "bug_localization_retrieval_recall_at_10": 0.2,
+        "bug_localization_retrieval_mrr": 0.2125
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4478.6,
+      "mean_estimated_input_tokens": 4219.2,
+      "actual_token_reduction_vs_whole_file": 0.10251350851198193,
+      "mean_provider_latency_ms": 2761.396520008566,
+      "mean_retrieval_latency_ms": 84.76561999996193,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4829,
+      "llm_latency_samples": 5
+    },
+    "acor_greedy": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.4,
+        "bug_localization_retrieval_recall_at_1": 0.2,
+        "bug_localization_retrieval_recall_at_5": 0.2,
+        "bug_localization_retrieval_recall_at_10": 0.2,
+        "bug_localization_retrieval_mrr": 0.21818181818181817
+      },
+      "model_bug_localization_hit_rate": 0.4,
+      "model_bug_localization_exact_set_accuracy": 0.4,
+      "mean_actual_provider_input_tokens": 4478.6,
+      "mean_estimated_input_tokens": 4219.2,
+      "actual_token_reduction_vs_whole_file": 0.10251350851198193,
+      "mean_provider_latency_ms": 2452.723520004656,
+      "mean_retrieval_latency_ms": 171.01376000209711,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4829,
+      "llm_latency_samples": 5
+    },
+    "acor_exact": {
+      "tasks": 5,
+      "successful_runs": 5,
+      "failed_runs": 0,
+      "models": {
+        "openai/gpt-oss-120b": 4,
+        "qwen/qwen3.8-27b": 1
+      },
+      "retrieval_metrics": {
+        "bug_localization_retrieval_recall": 0.6,
+        "bug_localization_retrieval_recall_at_1": 0.4,
+        "bug_localization_retrieval_recall_at_5": 0.4,
+        "bug_localization_retrieval_recall_at_10": 0.4,
+        "bug_localization_retrieval_mrr": 0.41818181818181815
+      },
+      "model_bug_localization_hit_rate": 0.6,
+      "model_bug_localization_exact_set_accuracy": 0.6,
+      "mean_actual_provider_input_tokens": 4781.2,
+      "mean_estimated_input_tokens": 4508.4,
+      "actual_token_reduction_vs_whole_file": 0.04094128341321697,
+      "mean_provider_latency_ms": 2720.7251200044993,
+      "mean_retrieval_latency_ms": 123.21020000963472,
+      "actual_input_budget_overruns": 0,
+      "actual_input_tokens_max": 4931,
+      "llm_latency_samples": 5
+    }
+  },
+  "indexing": {
+    "repositories": 5,
+    "successful_repositories": 5,
+    "java_source_files_total": 537,
+    "methods_total": 11060,
+    "unparsed_files_total": 0,
+    "mean_index_time_seconds": 71.43961347999866,
+    "per_repository": [
+      {
+        "repo_id": "lang-1-396afc3e",
+        "revision": "396afc3e4693cfee182efe582455f2d97058c068",
+        "java_source_files": 108,
+        "methods": 2242,
+        "index_time_seconds": 74.44035629997961,
+        "unparsed_file_count": 0,
+        "status": "success"
+      },
+      {
+        "repo_id": "lang-3-64cfee77",
+        "revision": "64cfee77e333d0c31a0fde0abe6dac3d97b0f078",
+        "java_source_files": 108,
+        "methods": 2235,
+        "index_time_seconds": 73.47432139999,
+        "unparsed_file_count": 0,
+        "status": "success"
+      },
+      {
+        "repo_id": "lang-5-bc255ccf",
+        "revision": "bc255ccf5c239666ab54e5a31720d3f482ae78eb",
+        "java_source_files": 108,
+        "methods": 2221,
+        "index_time_seconds": 73.27175730001181,
+        "unparsed_file_count": 0,
+        "status": "success"
+      },
+      {
+        "repo_id": "lang-6-f5a83bb9",
+        "revision": "f5a83bb90cf7b318ac72823e6b99d01d060abe41",
+        "java_source_files": 107,
+        "methods": 2211,
+        "index_time_seconds": 69.46435259998543,
+        "unparsed_file_count": 0,
+        "status": "success"
+      },
+      {
+        "repo_id": "lang-8-cfab1e4f",
+        "revision": "cfab1e4fa19755d65de7b81206d86f9e98622d8e",
+        "java_source_files": 106,
+        "methods": 2151,
+        "index_time_seconds": 66.54727980002644,
+        "unparsed_file_count": 0,
+        "status": "success"
+      }
+    ]
+  },
+  "limitations": [
+    "Five labelled Defects4J tasks are too few for generalization.",
+    "Six Lang-8 ablation generations used qwen/qwen3.8-27b after the primary Groq model hit its TPD quota; other generation rows used the primary model. These rows are model-confounded and should not be pooled as a same-model ablation.",
+    "The 5,000-token cap was enforced using the local tokenizer estimate. Provider-reported input tokens exceeded 5,000 in two completed whole-file requests; no completed request was rerun.",
+    "Ground truth contains one bug method per task; no change-impact gold labels are present."
+  ]
+}

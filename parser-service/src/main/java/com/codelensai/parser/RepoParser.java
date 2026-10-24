@@ -14,12 +14,16 @@ import com.github.javaparser.symbolsolver.JavaSymbolSolver;
 import com.github.javaparser.symbolsolver.javaparsermodel.declarations.JavaParserMethodDeclaration;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
+import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,10 +49,21 @@ public final class RepoParser {
 
     private final Path repoRoot;
     private final JavaParser javaParser;
+    private final boolean excludeTestSources;
 
     public RepoParser(Path repoRoot) {
+        this(repoRoot, List.of(), false);
+    }
+
+    public RepoParser(Path repoRoot, List<Path> classpath) {
+        this(repoRoot, classpath, false);
+    }
+
+    public RepoParser(
+            Path repoRoot, List<Path> classpath, boolean excludeTestSources) {
         this.repoRoot = repoRoot.toAbsolutePath().normalize();
-        this.javaParser = new JavaParser(buildParserConfiguration(this.repoRoot));
+        this.excludeTestSources = excludeTestSources;
+        this.javaParser = new JavaParser(buildParserConfiguration(this.repoRoot, classpath));
     }
 
     /**
@@ -60,24 +75,72 @@ public final class RepoParser {
      * declarations). LanguageLevel is pinned high (JAVA_17) so newer
      * syntax parses; this does not prevent parsing older-style code.
      */
-    private static ParserConfiguration buildParserConfiguration(Path repoRoot) {
+    private static ParserConfiguration buildParserConfiguration(
+            Path repoRoot, List<Path> classpath) {
         CombinedTypeSolver typeSolver = new CombinedTypeSolver();
         typeSolver.add(new ReflectionTypeSolver());
-        typeSolver.add(new JavaParserTypeSolver(repoRoot));
 
-        // Common Maven/Gradle layout: also register src/main/java explicitly
-        // in case the repo root itself is not the source root the caller
-        // passed in (harmless no-op if it doesn't exist or duplicates the
-        // root already added above).
-        Path conventionalSourceRoot = repoRoot.resolve("src/main/java");
-        if (Files.isDirectory(conventionalSourceRoot)) {
-            typeSolver.add(new JavaParserTypeSolver(conventionalSourceRoot));
+        List<Path> sourceRoots = findSourceRoots(repoRoot);
+        if (sourceRoots.isEmpty()) {
+            sourceRoots.add(repoRoot);
+        }
+        for (Path sourceRoot : sourceRoots) {
+            typeSolver.add(new JavaParserTypeSolver(sourceRoot));
+        }
+        for (Path entry : classpath) {
+            if (Files.isDirectory(entry)) {
+                typeSolver.add(new JavaParserTypeSolver(entry));
+            } else if (Files.isRegularFile(entry) && entry.toString().endsWith(".jar")) {
+                try {
+                    typeSolver.add(new JarTypeSolver(entry));
+                } catch (IOException e) {
+                    throw new IllegalArgumentException(
+                            "Could not load parser classpath JAR: " + entry, e);
+                }
+            } else {
+                throw new IllegalArgumentException(
+                        "Parser classpath entry is not a directory or JAR: " + entry);
+            }
         }
 
         ParserConfiguration config = new ParserConfiguration();
         config.setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
         config.setSymbolResolver(new JavaSymbolSolver(typeSolver));
         return config;
+    }
+
+    private static List<Path> findSourceRoots(Path repoRoot) {
+        List<Path> roots = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(repoRoot)) {
+            paths.filter(Files::isDirectory)
+                    .filter(path -> !isUnderIgnoredDir(repoRoot, path))
+                    .filter(path -> {
+                        Path parent = path.getParent();
+                        return path.getFileName() != null
+                                && path.getFileName().toString().equals("java")
+                                && parent != null
+                                && parent.getFileName() != null
+                                && Set.of("main", "test", "integrationTest")
+                                        .contains(parent.getFileName().toString())
+                                && parent.getParent() != null
+                                && parent.getParent().getFileName() != null
+                                && parent.getParent().getFileName().toString().equals("src");
+                    })
+                    .forEach(roots::add);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Could not discover Java source roots below " + repoRoot, e);
+        }
+        return roots;
+    }
+
+    private static boolean isUnderIgnoredDir(Path repoRoot, Path path) {
+        for (Path part : repoRoot.relativize(path)) {
+            if (IGNORED_DIR_NAMES.contains(part.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public CodeEntities.ParseResult parse() throws IOException {
@@ -112,15 +175,32 @@ public final class RepoParser {
             }
         }
 
+        // Diagnostic-only pre-pass: name and arity are a weak heuristic, not
+        // labelled ground truth, and must not be reported as recall.
+        Set<String> probableInRepoMethods = new HashSet<>();
+        for (CompilationUnit cu : compilationUnits) {
+            for (MethodDeclaration decl : cu.findAll(MethodDeclaration.class)) {
+                Optional<ClassOrInterfaceDeclaration> owner =
+                        decl.findAncestor(ClassOrInterfaceDeclaration.class);
+                if (owner.isPresent()
+                        && classById.containsKey(resolveQualifiedName(owner.get()))) {
+                    probableInRepoMethods.add(methodNameAndArity(
+                            decl.getNameAsString(), decl.getParameters().size()));
+                }
+            }
+        }
+
         // Pass 2b: methods, call edges, import edges. Requires classById
         // to already be complete (import edges only point at classes we
         // actually parsed -- see buildImportEdges).
         // ── Diagnostic accumulators ──────────────────────────────────────────
         int totalVisited = 0, totalResolved = 0, totalCallEdge = 0,
-            totalExternal = 0, totalUnresolved = 0;
+            totalExternal = 0, totalUnresolved = 0, totalNameArityMatches = 0;
+        Map<String, Integer> resolveExceptionMessages = new HashMap<>();
         // ────────────────────────────────────────────────────────────────────
         for (CompilationUnit cu : compilationUnits) {
-            MethodAndCallVisitor visitor = new MethodAndCallVisitor(classById.keySet());
+            MethodAndCallVisitor visitor = new MethodAndCallVisitor(
+                    classById.keySet(), probableInRepoMethods);
             visitor.visit(cu, null);
             output.methods.addAll(visitor.methods);
             output.call_edges.addAll(visitor.callEdges);
@@ -131,6 +211,9 @@ public final class RepoParser {
             totalCallEdge   += visitor.diagCallEdge;
             totalExternal   += visitor.diagExternal;
             totalUnresolved += visitor.diagUnresolved;
+            totalNameArityMatches += visitor.diagProbableInRepo;
+            visitor.resolveExceptionMessages.forEach(
+                    (message, count) -> resolveExceptionMessages.merge(message, count, Integer::sum));
             // ─────────────────────────────────────────────────────────────────
         }
 
@@ -145,6 +228,16 @@ public final class RepoParser {
         System.err.printf("[DIAG]   -> external/skipped  : %d (%.1f%% of total) [JDK/library — correct]%n", totalExternal, externalRate);
         System.err.printf("[DIAG] resolve() threw        : %d (%.1f%%) [unresolvable — correct skip]%n", totalUnresolved, unresolvedRate);
         System.err.printf("[DIAG] Graph signal estimate  : %.1f%% of visited calls became graph edges%n", callEdgeRate);
+        System.err.printf(
+                "[DIAG] name/arity heuristic  : %d/%d calls share a declared name+arity [not labelled recall]%n",
+                totalNameArityMatches, totalVisited);
+        resolveExceptionMessages.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .limit(5)
+                .forEach(entry -> System.err.printf(
+                        "[DIAG] resolve() exception  : %s (count=%d)%n",
+                        entry.getKey(), entry.getValue()));
         // ─────────────────────────────────────────────────────────────────────
 
         return output;
@@ -156,8 +249,25 @@ public final class RepoParser {
                     .filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> !isUnderIgnoredDir(p))
+                    .filter(p -> !excludeTestSources || !isTestSource(p))
                     .collect(Collectors.toList());
         }
+    }
+
+    private boolean isTestSource(Path file) {
+        List<String> segments = new ArrayList<>();
+        repoRoot.relativize(file).forEach(part -> segments.add(part.toString()));
+        if (!segments.isEmpty()
+                && Set.of("test", "tests").contains(segments.get(0))) {
+            return true;
+        }
+        for (int index = 0; index + 1 < segments.size(); index++) {
+            if (segments.get(index).equals("src")
+                    && segments.get(index + 1).equals("test")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isUnderIgnoredDir(Path file) {
@@ -225,7 +335,15 @@ public final class RepoParser {
                     .flatMap(CompilationUnit::getPackageDeclaration)
                     .map(pd -> pd.getNameAsString())
                     .orElse("");
-            return pkg.isEmpty() ? decl.getNameAsString() : pkg + "." + decl.getNameAsString();
+            List<String> names = new ArrayList<>();
+            ClassOrInterfaceDeclaration current = decl;
+            while (current != null) {
+                names.add(0, current.getNameAsString());
+                current = current.findAncestor(ClassOrInterfaceDeclaration.class)
+                        .orElse(null);
+            }
+            String nestedName = String.join(".", names);
+            return pkg.isEmpty() ? nestedName : pkg + "." + nestedName;
         }
     }
 
@@ -251,6 +369,10 @@ public final class RepoParser {
         return decl.getNameAsString() + "(" + params + ")";
     }
 
+    private static String methodNameAndArity(String name, int arity) {
+        return name + "/" + arity;
+    }
+
     /**
      * Single AST walk collecting both MethodInfo and CallEdge -- combined
      * into one visitor (rather than two separate passes) since both need
@@ -261,6 +383,7 @@ public final class RepoParser {
         final List<CodeEntities.MethodInfo> methods = new ArrayList<>();
         final List<CodeEntities.CallEdge> callEdges = new ArrayList<>();
         private final Set<String> knownClassIds;
+        private final Set<String> probableInRepoMethods;
 
         // ── Diagnostic counters (additive only, no logic changed) ──────────
         int diagTotal       = 0;  // total MethodCallExpr nodes visited that have a trackable caller
@@ -268,10 +391,13 @@ public final class RepoParser {
         int diagCallEdge    = 0;  // resolved AND callee is in knownClassIds  → real CallEdge
         int diagExternal    = 0;  // resolved but callee outside our source   → correctly skipped
         int diagUnresolved  = 0;  // resolve() threw                          → correctly skipped
+        int diagProbableInRepo = 0;
+        final Map<String, Integer> resolveExceptionMessages = new HashMap<>();
         // ───────────────────────────────────────────────────────────────────
 
-        MethodAndCallVisitor(Set<String> knownClassIds) {
+        MethodAndCallVisitor(Set<String> knownClassIds, Set<String> probableInRepoMethods) {
             this.knownClassIds = knownClassIds;
+            this.probableInRepoMethods = probableInRepoMethods;
         }
 
         @Override
@@ -328,6 +454,10 @@ public final class RepoParser {
 
             // ── Diagnostic: count this call as "visited" ─────────────────
             diagTotal++;
+            if (probableInRepoMethods.contains(methodNameAndArity(
+                    call.getNameAsString(), call.getArguments().size()))) {
+                diagProbableInRepo++;
+            }
             // ─────────────────────────────────────────────────────────────
 
             // Resolution can fail for many legitimate reasons (generics the
@@ -344,6 +474,11 @@ public final class RepoParser {
                 diagResolved++; // ── Diagnostic: resolution succeeded ──────
             } catch (Exception unresolved) {
                 diagUnresolved++; // ── Diagnostic: resolution threw ─────────
+                String message = unresolved.getMessage();
+                resolveExceptionMessages.merge(
+                        message == null || message.isBlank() ? "<no message>" : message,
+                        1,
+                        Integer::sum);
                 return;
             }
 

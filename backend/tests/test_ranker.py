@@ -1,12 +1,16 @@
 """
 Run with: pytest backend/tests/test_ranker.py -v
 """
+from pathlib import Path
+
 import pytest
 
 from app.acor.ranker import _exact_knapsack, _greedy_by_density, rank_and_select
+from app.acor.context_builder import build_context
 from app.acor.scorer import ScoredCandidate
 from app.api.schemas import ScoreBreakdown
 from app.config import Settings
+from app.retrieval.tokenizer import count_tokens
 
 
 def _scored(method_id: str, composite: float, token_count: int) -> ScoredCandidate:
@@ -33,6 +37,23 @@ def test_greedy_prefers_higher_density_when_it_must_choose():
     b = _scored("B", composite=6.0, token_count=20)
     selected = _greedy_by_density([a, b], token_budget=50)
     assert selected == {"B"}
+
+
+def test_greedy_keeps_highest_scoring_candidate_when_it_fits():
+    # Density picks B, C, and D first, but A has the strongest relevance score.
+    a = _scored("A", composite=10.0, token_count=40)
+    b = _scored("B", composite=6.0, token_count=10)
+    c = _scored("C", composite=5.0, token_count=10)
+    d = _scored("D", composite=4.0, token_count=10)
+
+    selected = _greedy_by_density([a, b, c, d], token_budget=50)
+
+    assert "A" in selected
+    assert sum(
+        candidate.token_count
+        for candidate in [a, b, c, d]
+        if candidate.method_id in selected
+    ) <= 50
 
 
 def test_greedy_never_exceeds_budget():
@@ -79,15 +100,16 @@ def test_exact_knapsack_never_scores_worse_than_greedy():
 
 
 def test_exact_knapsack_beats_greedy_on_a_constructed_adversarial_case():
-    """A genuine (verified) gap: greedy's density sort tries the two
-    highest-density items first, fills most of the budget on the first of
-    them, and then can't fit the second -- leaving it stuck with less
-    total value than simply taking the one solo item exact_knapsack finds.
+    """A genuine (verified) gap when the top-scoring item cannot fit.
+
+    Greedy takes one of the two higher-density light items, while exact
+    selection finds the fitting solo item with the greater total value.
     """
+    oversized = _scored("oversized", composite=20.0, token_count=31)
     solo = _scored("solo", composite=6.0, token_count=30)     # density 0.200
     lite_a = _scored("lite_a", composite=3.5, token_count=16)  # density 0.219
     lite_b = _scored("lite_b", composite=3.5, token_count=16)  # density 0.219
-    candidates = [solo, lite_a, lite_b]
+    candidates = [oversized, solo, lite_a, lite_b]
     budget = 30
 
     greedy_selected = _greedy_by_density(candidates, budget)
@@ -137,3 +159,24 @@ def test_rank_and_select_rejects_non_positive_budget():
     settings = Settings()
     with pytest.raises(ValueError):
         rank_and_select([_scored("A", 1.0, 10)], token_budget=0, settings=settings)
+
+
+def test_rank_and_select_deduplicates_and_budgets_formatted_context():
+    settings = Settings(ranker_strategy="exact")
+    first = _scored("A", composite=0.9, token_count=2)
+    first.snippet = "important method body"
+    duplicate = _scored("A", composite=0.8, token_count=2)
+    duplicate.snippet = "duplicate stale version"
+    other = _scored("B", composite=0.7, token_count=2)
+    other.file_path = "com/foo/Other.java"
+    other.snippet = "another method body"
+
+    candidates = [first, duplicate, other]
+    result = rank_and_select(candidates, token_budget=45, settings=settings)
+    formatted = build_context(result.selected, Path("."))
+
+    assert len({item.method_id for item in result.selected}) == len(result.selected)
+    assert [item.method_id for item in result.selected].count("A") == 1
+    assert result.total_tokens == count_tokens(formatted)
+    assert result.total_tokens <= 45
+    assert result.selected[0].method_id == "A"

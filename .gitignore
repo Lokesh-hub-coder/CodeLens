@@ -7,10 +7,26 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
+**/.cache/
+.coverage
+coverage.xml
 
 # --- Environment / secrets ---
 .env
+**/.env
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
 *.local.env
+**/*.local.env
+*.pem
+*.key
+secrets/
+**/secrets/
+credentials/
+**/credentials/
 
 # --- Node / frontend ---
 node_modules/
@@ -32,10 +48,18 @@ storage/
 *.sqlite3
 chroma_db/
 repos/
+**/qdrant/
 
 # --- Evaluation outputs ---
 eval_results/
+**/eval_results/
+logs/
+**/logs/
+dist/
+**/dist/
+*.zip
 *.log
+**/*.log
 
 # --- OS / IDE ---
 .DS_Store

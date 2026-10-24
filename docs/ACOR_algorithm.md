@@ -29,15 +29,18 @@ S(c, q) = w_sem * norm(semantic_sim(c, q))
   call graph, decaying linearly to zero at `GRAPH_MAX_HOPS` (default 4).
 - **`dependency_proximity`** -- the same decay shape, one level up, over
   the class/import dependency graph.
-- **`symbol_match`** -- 1.0 for an exact identifier match against
-  something named in the query, else Jaccard overlap of camelCase-split
-  subtokens, else 0.
+- **`symbol_match`** -- the maximum of method-name matching (exact identifier
+  or Jaccard overlap of camelCase-split subtokens), a quarter-weighted,
+  candidate-set-normalized BM25 match against method source, and class-name
+  overlap for a candidate's enclosing class. Source matching helps distinguish
+  overloads whose behavior is described in the method body rather than its
+  name; enclosing-class matching supports related nested implementations.
 
 Weights (`ACOR_WEIGHT_*` in `.env`, defaults 0.40 / 0.20 / 0.15 / 0.25) are
-renormalized to sum to 1 and are the first thing to tune per-repository or
-per-query-type -- and the natural axis for an ablation table in your
-evaluation chapter (drop one weight to zero at a time and measure the
-precision/recall hit with `evaluation/metrics.py`).
+renormalized to sum to 1 and can be overridden per repository. Intent
+profiles are optional and disabled by default. The benchmark runner can
+zero one signal at a time while holding the task set, model, prompt, and
+ACOR candidate generation constant.
 
 **Why relevance scoring and budget selection are two separate modules**
 (`scorer.py` then `ranker.py`, not one combined function): mixing "how
@@ -55,7 +58,7 @@ Once every candidate has a relevance score (the "value") and a token cost
 exceeding the token budget is exactly 0/1 knapsack. `acor/ranker.py`
 offers two solvers:
 
-- **Greedy by score-density** (default): sort by `score / token_count`,
+- **Greedy by score-density** (default): sort by `score / formatted-token-cost`,
   take candidates in that order while they fit. `O(n log n)`. This is the
   standard approximation for knapsack-shaped problems and is very close
   to optimal whenever individual items are small relative to the budget --
@@ -63,8 +66,11 @@ offers two solvers:
   against budgets in the thousands.
 - **Exact DP knapsack**: textbook `O(n * budget)` dynamic program,
   offered for small candidate sets (`EXACT_KNAPSACK_MAX_CANDIDATES`,
-  default 200) where that cost is still cheap. Token costs are bucketed
-  to keep the DP table a sane size.
+  default 200). Above that candidate limit, exact mode falls back to
+  greedy. The solver estimates per-item formatted cost; the final rendered
+  context is recounted, and lowest-ranked snippets are removed until the
+  formatted context fits. This is a strict excerpt budget, not a budget for
+  the system prompt or developer query.
 
 `backend/tests/test_ranker.py` includes a constructed counterexample
 where greedy provably picks a worse subset than the exact solver -- worth
@@ -73,14 +79,11 @@ demonstrable trade-off, not a hedge.
 
 ## 3. Embedding model choice
 
-The default, `flax-sentence-embeddings/st-codesearch-distilroberta-base`,
-is trained specifically for natural-language-query-to-code-snippet
-similarity (a CodeSearchNet-style objective), not general sentence
-similarity. This matters: a general-purpose model like MiniLM will happily
-rank a comment-heavy, semantically-off-target method above a dense,
-correct one just because the comments share vocabulary with the query.
-Swap `EMBEDDING_MODEL` in `.env` for any other `sentence-transformers`-
-compatible code model without touching pipeline code.
+The default, `BAAI/bge-small-en-v1.5`, runs through FastEmbed and is
+configured for 384-dimensional vectors. It is a general text-embedding
+model, not a code-specialized model; the quality of code retrieval must be
+measured on the supplied benchmark tasks rather than inferred from its
+name. FastEmbed is the only supported embedding backend.
 
 ## 4. How ACOR relates to the papers in your synopsis
 
@@ -208,25 +211,20 @@ your related-work section with these three distinctions -- it will read
 as a considered positioning rather than an omission if a reviewer finds
 these papers themselves.
 
-## 6. Suggested experiments for the evaluation chapter
+## 6. Controlled evaluation
 
-Mapping directly onto `evaluation/metrics.py` and the synopsis' Section 7:
+`scripts/evaluate_retrieval.py` accepts a manually labeled task file and
+runs whole-file retrieval, semantic-only retrieval, and ACOR for the same
+tasks using the same configured LLM and evaluation prompt.
+`--include-ablations` additionally disables each ACOR score signal and compares
+greedy/exact ranking. Method IDs and task labels must be supplied by the
+benchmark author; the runner does not generate self-confirming labels.
 
-1. **Retrieval quality**: precision/recall@k against a hand-labeled or
-   RepoBench-R-style gold set, for each query intent category separately
-   (bug explanation vs. root cause vs. feature location) -- the ACOR
-   weights that work best likely differ by intent, which is itself a
-   finding worth reporting.
-2. **Token reduction**: `token_reduction_ratio()` against a "naive"
-   baseline (e.g. every file that shares a keyword with the query, sent
-   whole) -- already wired up as `naive_baseline_tokens` in
-   `QueryResponse`.
-3. **Ablations**: zero out one ACOR weight at a time; exact-knapsack vs.
-   greedy ranker on the same candidate sets; with/without neighbor-stub
-   expansion (see `architecture.md`, "Extending the ranker").
-4. **Answer quality**: pick a rubric (faithfulness to the shown excerpt,
-   correctness of the identified root cause, actionability of the
-   suggested fix) and either have 2-3 team members score a shared sample
-   independently, or use a second, stronger LLM as a judge with the same
-   rubric -- state which you chose and why, since both are defensible but
-   have different threats to validity worth acknowledging in the report.
+Provider-reported input tokens are stored separately from the local
+`tiktoken` estimate. Token reduction is reported only when actual usage is
+available for both the whole-file and compared runs. Latency, model
+predictions, bug-localization hit/exact match, and change-impact
+precision/recall are recorded per task and condition. No empirical
+benchmark result is claimed until this runner is executed against a
+reviewed labeled dataset and a real model. See `docs/evaluation.md` for
+task format, metric definitions, and limitations.
