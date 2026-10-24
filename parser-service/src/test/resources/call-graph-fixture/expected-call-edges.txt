@@ -1,0 +1,6 @@
+sample.Alpha#start() -> sample.Beta#first()
+sample.Alpha#start() -> sample.Beta#second(String)
+sample.Alpha#start() -> sample.Alpha#target()
+sample.Alpha#target() -> sample.Beta#first()
+sample.Beta#first() -> sample.Alpha#target()
+sample.Beta#second(String) -> sample.Beta#first()

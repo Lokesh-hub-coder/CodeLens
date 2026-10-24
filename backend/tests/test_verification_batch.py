@@ -8,11 +8,13 @@ from pathlib import Path
 import os
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api import routes
 from app.config import Settings, get_settings
 from app.core import candidate_pipeline
+from app.core.query_service import _INTENT_WEIGHTS
 from app.core import repo_index as repo_index_module
 from app.core.candidate_pipeline import (
     generate_change_impact_candidates,
@@ -23,7 +25,7 @@ from app.core.repo_index import RepoIndex, RepoRootMissing
 from app.graphs.call_graph import CallGraph
 from app.graphs.dependency_graph import DependencyGraph
 from app.graphs.symbol_index import SymbolIndex
-from app.llm.prompts import SYSTEM_PROMPT
+from app.llm.prompts import STRUCTURED_SYSTEM_PROMPT
 from app.parsing.java_bridge import (
     CallEdge,
     ClassInfo,
@@ -61,6 +63,7 @@ class FakeVectorStore(VectorStore):
 
     def add(self, ids: list[str], vectors: np.ndarray, metadatas: list[dict]) -> None:
         for i, v, m in zip(ids, vectors, metadatas):
+            self._items = [item for item in self._items if item[0] != i]
             self._items.append((i, v, m))
 
     def search(self, query_vector: np.ndarray, top_k: int) -> list[SearchResult]:
@@ -68,6 +71,20 @@ class FakeVectorStore(VectorStore):
 
     def count(self) -> int:
         return len(self._items) or len(self._results)
+
+    def ids(self) -> set[str]:
+        return {item[0] for item in self._items} | {
+            result.metadata["method_id"] for result in self._results
+        }
+
+    def remove(self, ids: list[str]) -> None:
+        removed = set(ids)
+        self._items = [item for item in self._items if item[0] not in removed]
+        self._results = [
+            result
+            for result in self._results
+            if result.metadata["method_id"] not in removed
+        ]
 
     def clear(self) -> None:
         self._items.clear()
@@ -180,7 +197,10 @@ def query_client(tmp_path, monkeypatch):
                 ),
             ],
         ),
-        dependency_graph=DependencyGraph.build(classes, []),
+        dependency_graph=DependencyGraph.build(
+            classes,
+            [ImportEdge("com.foo.A", "com.foo.B")],
+        ),
         symbol_index=SymbolIndex.build(classes, methods),
         vector_store=FakeVectorStore(vector_results),
         num_files=2,
@@ -294,7 +314,126 @@ def test_query_endpoint_uses_structured_system_prompt(query_client, monkeypatch)
     )
 
     assert response.status_code == 200, response.text
-    assert captured_prompts == [SYSTEM_PROMPT]
+    assert captured_prompts == [STRUCTURED_SYSTEM_PROMPT]
+    assert response.json()["structured_answer"] is None
+    assert response.json()["metrics"]["structured_output_validated"] is False
+    assert response.json()["metrics"]["structured_output_limitation"]
+
+
+def test_query_endpoint_returns_validated_analysis_evidence_and_provider_usage(
+    query_client, monkeypatch
+):
+    client, _, repo_id, _ = query_client
+
+    class StructuredLLM:
+        def generate(self, system_prompt: str, user_prompt: str):
+            assert "one JSON object" in system_prompt
+            assert "BEGIN REPOSITORY EXCERPT" in user_prompt
+            return type(
+                "Response",
+                (),
+                {
+                    "text": (
+                        '{"summary":"Diagnosis verified.",'
+                        '"root_cause":"The call path throws.",'
+                        '"causal_chain":["caller invokes changedMethod"],'
+                        '"suggested_fix":null,"limitations":[],'
+                        '"unresolved_questions":[]}'
+                    ),
+                    "latency_ms": 12.5,
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                },
+            )()
+
+    monkeypatch.setattr(routes, "get_llm_client", lambda _: StructuredLLM())
+    response = client.post(
+        f"/repositories/{repo_id}/query",
+        json={"query": "why does changedMethod fail?", "token_budget": 8000},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["structured_answer"]["summary"] == "Diagnosis verified."
+    assert result["structured_answer"]["related_methods"]
+    assert result["evidence"][0]["method_id"] == "com.foo.A#changedMethod()"
+    assert result["evidence"][0]["rank"] == 1
+    assert result["evidence"][0]["score"]["composite"] >= 0
+    assert result["metrics"]["structured_output_validated"] is True
+    assert result["metrics"]["actual_provider_input_tokens"] == 120
+    assert result["metrics"]["actual_provider_total_tokens"] == 150
+    assert result["metrics"]["estimated_prompt_tokens"] > 0
+
+
+def test_query_endpoint_surfaces_provider_errors_without_success_fallback(
+    query_client, monkeypatch
+):
+    client, _, repo_id, _ = query_client
+
+    class FailedLLM:
+        def generate(self, *_):
+            raise RuntimeError("secret-provider-detail")
+
+    monkeypatch.setattr(routes, "get_llm_client", lambda _: FailedLLM())
+    response = client.post(
+        f"/repositories/{repo_id}/query",
+        json={"query": "why does changedMethod fail?", "token_budget": 8000},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "llm_provider_error"
+    assert "secret-provider-detail" not in response.text
+
+
+def test_graph_endpoint_reports_edges_near_resolved_symbol(query_client):
+    client, _, repo_id, _ = query_client
+    response = client.get(
+        f"/repositories/{repo_id}/graph",
+        params={"symbol": "changedMethod", "max_hops": 2},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["resolved_symbol"] == "com.foo.A#changedMethod()"
+    assert result["call_graph_edges"] == 2
+    assert result["dependency_graph_edges"] == 1
+    assert any(
+        edge["source"] == "com.foo.B#callerMethod()"
+        and edge["target"] == "com.foo.A#changedMethod()"
+        for edge in result["call_graph_edges_near_symbol"]
+    )
+    assert result["dependency_edges_near_symbol"] == [
+        {"source": "com.foo.A", "target": "com.foo.B"}
+    ]
+
+
+def test_missing_source_checkout_is_not_reported_as_unindexed(
+    query_client, tmp_path
+):
+    _, settings, repo_id, repo_index = query_client
+    repo_index.repo_root = tmp_path / "removed-checkout"
+    with pytest.raises(HTTPException) as exc_info:
+        routes._get_repo_index(repo_id, settings)
+
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.detail["code"] == "repository_source_unavailable"
+
+
+def test_repository_status_explains_missing_index_and_source_checkout(
+    query_client, tmp_path
+):
+    client, _, repo_id, repo_index = query_client
+    repo_index.repo_root = tmp_path / "removed-checkout"
+    stale = client.get(f"/repositories/{repo_id}/status")
+    missing = client.get("/repositories/never-indexed/status")
+
+    assert stale.status_code == 200
+    assert stale.json()["indexed"] is False
+    assert stale.json()["error_code"] == "repository_source_unavailable"
+    assert missing.status_code == 200
+    assert missing.json()["indexed"] is False
+    assert missing.json()["error_code"] == "repository_not_indexed"
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +458,18 @@ def test_total_context_tokens_equals_count_tokens_context_text(query_client, mon
         item["token_count"] for item in result["retrieved_context"]
     )
     assert result["total_context_tokens"] == count_tokens(context_text)
+    assert result["total_context_tokens"] <= result["token_budget"]
     assert result["total_context_tokens"] != selected_snippet_tokens
+
+
+def test_query_rejects_nonpositive_token_budgets(query_client):
+    client, _, repo_id, _ = query_client
+    response = client.post(
+        f"/repositories/{repo_id}/query",
+        json={"query": "why does changedMethod fail?", "token_budget": 0},
+    )
+
+    assert response.status_code == 422
 
 
 def test_unreadable_snippet_is_dropped_from_candidates_and_selection(
@@ -485,6 +635,9 @@ def test_qdrant_force_reindex_replaces_points(tmp_path, monkeypatch):
         assert second_count == 1
         assert second_count == second.json()["num_methods"]
         assert search_ids == {"com.test.Sample#newOnly()"}
+        assert vector_store.ids() == search_ids
+        vector_store.remove(["com.test.Sample#newOnly()"])
+        assert vector_store.count() == 0
         print(f"Qdrant point counts: first={first_count}, second={second_count}")
     finally:
         routes._repo_registry.pop(repo_id, None)
@@ -807,6 +960,6 @@ def test_acor_use_intent_weights_toggle(query_client, monkeypatch):
     assert adaptive_response.status_code == 200, adaptive_response.text
     adaptive_intent = adaptive_response.json()["detected_intent"]
     assert adaptive_intent == QueryIntentLabel.ROOT_CAUSE_ANALYSIS.value
-    assert captured_weights[-1] == routes._INTENT_WEIGHTS[
+    assert captured_weights[-1] == _INTENT_WEIGHTS[
         QueryIntentLabel(adaptive_intent)
     ]

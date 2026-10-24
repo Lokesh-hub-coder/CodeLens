@@ -7,16 +7,25 @@ or simply `python -m app.main` for a quick local run without reload.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from app.api.routes import router
 from app.config import get_settings
+from app.watcher.live_sync import stop_all_repo_watchers
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        try:
+            yield
+        finally:
+            stop_all_repo_watchers()
 
     app = FastAPI(
         title="CodeLens",
@@ -25,6 +34,7 @@ def create_app() -> FastAPI:
             "Graph-aware candidate selection · Token-budgeted ranking · Intent-adaptive scoring"
         ),
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     app.add_middleware(

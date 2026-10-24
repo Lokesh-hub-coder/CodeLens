@@ -14,6 +14,7 @@ import com.github.javaparser.symbolsolver.JavaSymbolSolver;
 import com.github.javaparser.symbolsolver.javaparsermodel.declarations.JavaParserMethodDeclaration;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
+import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver;
 
 import java.io.IOException;
@@ -48,10 +49,21 @@ public final class RepoParser {
 
     private final Path repoRoot;
     private final JavaParser javaParser;
+    private final boolean excludeTestSources;
 
     public RepoParser(Path repoRoot) {
+        this(repoRoot, List.of(), false);
+    }
+
+    public RepoParser(Path repoRoot, List<Path> classpath) {
+        this(repoRoot, classpath, false);
+    }
+
+    public RepoParser(
+            Path repoRoot, List<Path> classpath, boolean excludeTestSources) {
         this.repoRoot = repoRoot.toAbsolutePath().normalize();
-        this.javaParser = new JavaParser(buildParserConfiguration(this.repoRoot));
+        this.excludeTestSources = excludeTestSources;
+        this.javaParser = new JavaParser(buildParserConfiguration(this.repoRoot, classpath));
     }
 
     /**
@@ -63,24 +75,72 @@ public final class RepoParser {
      * declarations). LanguageLevel is pinned high (JAVA_17) so newer
      * syntax parses; this does not prevent parsing older-style code.
      */
-    private static ParserConfiguration buildParserConfiguration(Path repoRoot) {
+    private static ParserConfiguration buildParserConfiguration(
+            Path repoRoot, List<Path> classpath) {
         CombinedTypeSolver typeSolver = new CombinedTypeSolver();
         typeSolver.add(new ReflectionTypeSolver());
-        typeSolver.add(new JavaParserTypeSolver(repoRoot));
 
-        // Common Maven/Gradle layout: also register src/main/java explicitly
-        // in case the repo root itself is not the source root the caller
-        // passed in (harmless no-op if it doesn't exist or duplicates the
-        // root already added above).
-        Path conventionalSourceRoot = repoRoot.resolve("src/main/java");
-        if (Files.isDirectory(conventionalSourceRoot)) {
-            typeSolver.add(new JavaParserTypeSolver(conventionalSourceRoot));
+        List<Path> sourceRoots = findSourceRoots(repoRoot);
+        if (sourceRoots.isEmpty()) {
+            sourceRoots.add(repoRoot);
+        }
+        for (Path sourceRoot : sourceRoots) {
+            typeSolver.add(new JavaParserTypeSolver(sourceRoot));
+        }
+        for (Path entry : classpath) {
+            if (Files.isDirectory(entry)) {
+                typeSolver.add(new JavaParserTypeSolver(entry));
+            } else if (Files.isRegularFile(entry) && entry.toString().endsWith(".jar")) {
+                try {
+                    typeSolver.add(new JarTypeSolver(entry));
+                } catch (IOException e) {
+                    throw new IllegalArgumentException(
+                            "Could not load parser classpath JAR: " + entry, e);
+                }
+            } else {
+                throw new IllegalArgumentException(
+                        "Parser classpath entry is not a directory or JAR: " + entry);
+            }
         }
 
         ParserConfiguration config = new ParserConfiguration();
         config.setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
         config.setSymbolResolver(new JavaSymbolSolver(typeSolver));
         return config;
+    }
+
+    private static List<Path> findSourceRoots(Path repoRoot) {
+        List<Path> roots = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(repoRoot)) {
+            paths.filter(Files::isDirectory)
+                    .filter(path -> !isUnderIgnoredDir(repoRoot, path))
+                    .filter(path -> {
+                        Path parent = path.getParent();
+                        return path.getFileName() != null
+                                && path.getFileName().toString().equals("java")
+                                && parent != null
+                                && parent.getFileName() != null
+                                && Set.of("main", "test", "integrationTest")
+                                        .contains(parent.getFileName().toString())
+                                && parent.getParent() != null
+                                && parent.getParent().getFileName() != null
+                                && parent.getParent().getFileName().toString().equals("src");
+                    })
+                    .forEach(roots::add);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Could not discover Java source roots below " + repoRoot, e);
+        }
+        return roots;
+    }
+
+    private static boolean isUnderIgnoredDir(Path repoRoot, Path path) {
+        for (Path part : repoRoot.relativize(path)) {
+            if (IGNORED_DIR_NAMES.contains(part.toString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public CodeEntities.ParseResult parse() throws IOException {
@@ -115,8 +175,8 @@ public final class RepoParser {
             }
         }
 
-        // Diagnostic-only pre-pass: name and arity approximate calls whose
-        // declarations are present in this repository's parsed source.
+        // Diagnostic-only pre-pass: name and arity are a weak heuristic, not
+        // labelled ground truth, and must not be reported as recall.
         Set<String> probableInRepoMethods = new HashSet<>();
         for (CompilationUnit cu : compilationUnits) {
             for (MethodDeclaration decl : cu.findAll(MethodDeclaration.class)) {
@@ -135,7 +195,7 @@ public final class RepoParser {
         // actually parsed -- see buildImportEdges).
         // ── Diagnostic accumulators ──────────────────────────────────────────
         int totalVisited = 0, totalResolved = 0, totalCallEdge = 0,
-            totalExternal = 0, totalUnresolved = 0, totalProbableInRepo = 0;
+            totalExternal = 0, totalUnresolved = 0, totalNameArityMatches = 0;
         Map<String, Integer> resolveExceptionMessages = new HashMap<>();
         // ────────────────────────────────────────────────────────────────────
         for (CompilationUnit cu : compilationUnits) {
@@ -151,7 +211,7 @@ public final class RepoParser {
             totalCallEdge   += visitor.diagCallEdge;
             totalExternal   += visitor.diagExternal;
             totalUnresolved += visitor.diagUnresolved;
-            totalProbableInRepo += visitor.diagProbableInRepo;
+            totalNameArityMatches += visitor.diagProbableInRepo;
             visitor.resolveExceptionMessages.forEach(
                     (message, count) -> resolveExceptionMessages.merge(message, count, Integer::sum));
             // ─────────────────────────────────────────────────────────────────
@@ -162,8 +222,6 @@ public final class RepoParser {
         double callEdgeRate  = totalVisited   > 0 ? 100.0 * totalCallEdge   / totalVisited   : 0;
         double externalRate  = totalVisited   > 0 ? 100.0 * totalExternal   / totalVisited   : 0;
         double unresolvedRate = totalVisited  > 0 ? 100.0 * totalUnresolved / totalVisited   : 0;
-        double edgeRecallEstimate = totalProbableInRepo > 0
-                ? 100.0 * totalCallEdge / totalProbableInRepo : 0;
         System.err.printf("[DIAG] MethodCallExpr visited : %d%n", totalVisited);
         System.err.printf("[DIAG] resolve() succeeded    : %d (%.1f%%)%n", totalResolved, resolvedRate);
         System.err.printf("[DIAG]   -> became CallEdge   : %d (%.1f%% of total) [in-repo calls]%n", totalCallEdge, callEdgeRate);
@@ -171,8 +229,8 @@ public final class RepoParser {
         System.err.printf("[DIAG] resolve() threw        : %d (%.1f%%) [unresolvable — correct skip]%n", totalUnresolved, unresolvedRate);
         System.err.printf("[DIAG] Graph signal estimate  : %.1f%% of visited calls became graph edges%n", callEdgeRate);
         System.err.printf(
-                "[DIAG] edge_recall_estimate   : %d/%d (%.1f%%) [CallEdges / probable in-repo calls]%n",
-                totalCallEdge, totalProbableInRepo, edgeRecallEstimate);
+                "[DIAG] name/arity heuristic  : %d/%d calls share a declared name+arity [not labelled recall]%n",
+                totalNameArityMatches, totalVisited);
         resolveExceptionMessages.entrySet().stream()
                 .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
                         .thenComparing(Map.Entry.comparingByKey()))
@@ -191,8 +249,25 @@ public final class RepoParser {
                     .filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> !isUnderIgnoredDir(p))
+                    .filter(p -> !excludeTestSources || !isTestSource(p))
                     .collect(Collectors.toList());
         }
+    }
+
+    private boolean isTestSource(Path file) {
+        List<String> segments = new ArrayList<>();
+        repoRoot.relativize(file).forEach(part -> segments.add(part.toString()));
+        if (!segments.isEmpty()
+                && Set.of("test", "tests").contains(segments.get(0))) {
+            return true;
+        }
+        for (int index = 0; index + 1 < segments.size(); index++) {
+            if (segments.get(index).equals("src")
+                    && segments.get(index + 1).equals("test")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isUnderIgnoredDir(Path file) {
@@ -260,7 +335,15 @@ public final class RepoParser {
                     .flatMap(CompilationUnit::getPackageDeclaration)
                     .map(pd -> pd.getNameAsString())
                     .orElse("");
-            return pkg.isEmpty() ? decl.getNameAsString() : pkg + "." + decl.getNameAsString();
+            List<String> names = new ArrayList<>();
+            ClassOrInterfaceDeclaration current = decl;
+            while (current != null) {
+                names.add(0, current.getNameAsString());
+                current = current.findAncestor(ClassOrInterfaceDeclaration.class)
+                        .orElse(null);
+            }
+            String nestedName = String.join(".", names);
+            return pkg.isEmpty() ? nestedName : pkg + "." + nestedName;
         }
     }
 

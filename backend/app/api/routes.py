@@ -1,4 +1,4 @@
-"""FastAPI router - two endpoints: index a repo, query a repo.
+"""FastAPI router for repository indexing, queries, status, and graph inspection.
 
 In-memory registry (_repo_registry) is backed by disk: on startup any
 repo whose .pkl exists in INDEX_STORAGE_DIR is available immediately
@@ -10,63 +10,78 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query as FastAPIQuery
 
 from app.acor.context_builder import build_context
-from app.acor.ranker import rank_and_select
-from app.acor.scorer import Candidate, score_candidates
+from app.acor.scorer import score_candidates
 from app.api.schemas import (
+    GraphInspectionResponse,
     IndexRepositoryRequest,
     IndexRepositoryResponse,
-    QueryIntentLabel,
     QueryRequest,
     QueryResponse,
     RepositoryStatusResponse,
-    RetrievedContextItem,
 )
-from app.config import ACORWeights, Settings, get_settings
-from app.core.repo_index import RepoIndex
-from app.evaluation.metrics import LatencyTracker
+from app.config import Settings, get_settings
+from app.core import candidate_pipeline
+from app.core.query_service import (
+    execute_repository_query,
+    inspect_repository_graphs,
+)
+from app.core.repo_index import RepoIndex, RepoRootMissing
 from app.graphs.call_graph import CallGraph
 from app.graphs.dependency_graph import DependencyGraph
 from app.graphs.symbol_index import SymbolIndex
-from app.llm.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.llm.providers import get_llm_client
 from app.parsing.java_bridge import parse_repository
 from app.parsing.repo_walker import compute_repo_fingerprint, read_snippet
 from app.parsing.source_filter import filter_test_sources
 from app.retrieval.embeddings import get_embedding_model
-from app.retrieval.query_understanding import analyze_query
 from app.retrieval.tokenizer import count_tokens
 from app.retrieval.vector_store import get_vector_store
+from app.watcher.live_sync import start_repo_watcher, stop_repo_watcher
 
 router = APIRouter()
 
 # Process-level registry: repo_id -> RepoIndex
 _repo_registry: dict[str, RepoIndex] = {}
 
-# Intent-adaptive weight profiles
-_INTENT_WEIGHTS: dict[QueryIntentLabel, ACORWeights] = {
-    QueryIntentLabel.ROOT_CAUSE_ANALYSIS: ACORWeights(semantic=0.35, call_graph=0.30, dependency=0.10, symbol=0.25),
-    QueryIntentLabel.BUG_EXPLANATION:     ACORWeights(semantic=0.40, call_graph=0.25, dependency=0.10, symbol=0.25),
-    QueryIntentLabel.FEATURE_LOCATION:    ACORWeights(semantic=0.30, call_graph=0.15, dependency=0.15, symbol=0.40),
-    QueryIntentLabel.REFACTORING:         ACORWeights(semantic=0.45, call_graph=0.15, dependency=0.25, symbol=0.15),
-    QueryIntentLabel.GENERAL_QA:          ACORWeights(semantic=0.50, call_graph=0.15, dependency=0.15, symbol=0.20),
-}
-
-
 def _get_repo_index(repo_id: str, settings: Settings) -> RepoIndex:
-    """Return from memory, or load from disk, or raise 404."""
+    """Return from memory or disk, distinguishing missing indexes from missing roots."""
     if repo_id in _repo_registry:
         idx = _repo_registry[repo_id]
         if idx.num_methods > 0 and idx.vector_store.count() > 0:
+            if not idx.repo_root.is_dir():
+                _repo_registry.pop(repo_id, None)
+                raise HTTPException(
+                    status_code=410,
+                    detail={
+                        "code": "repository_source_unavailable",
+                        "message": "The index exists, but its source checkout is unavailable.",
+                    },
+                )
             return idx
     try:
         idx = RepoIndex.load(repo_id, settings.index_storage_dir, settings)
         _repo_registry[repo_id] = idx
+        start_repo_watcher(idx, settings)
         return idx
+    except RepoRootMissing as exc:
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "code": "repository_source_unavailable",
+                "message": "The index exists, but its source checkout is unavailable.",
+            },
+        ) from exc
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Repository '{repo_id}' not indexed.")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "repository_not_indexed",
+                "message": f"Repository '{repo_id}' is not indexed in this server's configured index directory.",
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +104,15 @@ async def index_repository(
             import pickle
             with open(pkl_file, "rb") as f:
                 payload = pickle.load(f)
+            unparsed_files = payload.get("unparsed_files", [])
+            if unparsed_files:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Stored index for '{repo_id}' is incomplete: "
+                        f"{len(unparsed_files)} Java source files failed to parse."
+                    ),
+                )
             return IndexRepositoryResponse(
                 repo_id=payload.get("repo_id", repo_id),
                 num_files=payload.get("num_files", 0),
@@ -96,9 +120,11 @@ async def index_repository(
                 num_methods=payload.get("num_methods", 0),
                 num_call_edges=payload.get("num_call_edges", 0),
                 num_import_edges=payload.get("num_import_edges", 0),
-                unparsed_files=payload.get("unparsed_files", []),
+                unparsed_files=unparsed_files,
                 index_time_seconds=0.0,
             )
+        except HTTPException:
+            raise
         except Exception:
             pass
 
@@ -112,6 +138,17 @@ async def index_repository(
     parsed = parse_repository(repo_path, settings)
     if settings.exclude_test_sources:
         parsed = filter_test_sources(parsed)
+    if parsed.unparsed_files:
+        preview = ", ".join(parsed.unparsed_files[:10])
+        remaining = len(parsed.unparsed_files) - min(len(parsed.unparsed_files), 10)
+        suffix = f" (and {remaining} more)" if remaining else ""
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Indexing '{repo_id}' aborted: {len(parsed.unparsed_files)} Java "
+                f"source files failed to parse: {preview}{suffix}"
+            ),
+        )
 
     if len(parsed.methods) == 0:
         # If directory has no java files, check if a valid saved index already exists
@@ -202,7 +239,9 @@ async def index_repository(
         file_token_counts=file_token_counts,
     )
     repo_index.save(settings.index_storage_dir)
+    stop_repo_watcher(repo_id)
     _repo_registry[repo_id] = repo_index
+    start_repo_watcher(repo_index, settings)
 
     return IndexRepositoryResponse(
         repo_id=repo_id,
@@ -234,8 +273,14 @@ async def repository_status(
             num_classes=idx.num_classes,
             fingerprint=idx.fingerprint,
         )
-    except HTTPException:
-        return RepositoryStatusResponse(repo_id=repo_id, indexed=False)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return RepositoryStatusResponse(
+            repo_id=repo_id,
+            indexed=False,
+            error_code=detail.get("code", "repository_unavailable"),
+            message=detail.get("message", "Repository index is unavailable."),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,99 +293,30 @@ async def query_repository(
     request:  QueryRequest,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> QueryResponse:
-    from app.core.candidate_pipeline import get_candidates
-
     repo_index   = _get_repo_index(repo_id, settings)
-    query        = analyze_query(request.query)
-    token_budget = request.token_budget or settings.default_token_budget
-
-    t_retrieval = LatencyTracker()
-    t_retrieval.start()
-
-    embedding_model = get_embedding_model(settings)
-
-    # Candidate generation: root-cause (semantic + graph) or change-impact (graph + supplement)
-    # Routes automatically based on intent / changed_symbol param
-    candidates = get_candidates(
-        query=query,
-        repo_index=repo_index,
-        embedding_model=embedding_model,
-        settings=settings,
-        changed_symbol=request.changed_symbol,
+    return execute_repository_query(
+        repo_id,
+        request,
+        settings,
+        repo_index,
+        embedding_model_factory=get_embedding_model,
+        candidate_factory=candidate_pipeline.get_candidates,
+        scorer=score_candidates,
+        context_builder=build_context,
+        llm_client_factory=get_llm_client,
     )
 
-    # Unique files touched by any candidate (Bug 1a fix: naive baseline = whole files)
-    touched_files = {c.file_path for c in candidates}
-    naive_baseline_tokens = sum(
-        repo_index.file_token_counts.get(f, 0) for f in touched_files
-    )
-    if naive_baseline_tokens == 0:
-        naive_baseline_tokens = sum(c.token_count for c in candidates)
 
-    # ACOR: score with intent-adaptive weights (Bug 1c fix: toggle option)
-    if settings.acor_use_intent_weights:
-        weights = _INTENT_WEIGHTS.get(query.intent, settings.acor_weights)
-    else:
-        weights = settings.acor_weights
-
-    scored  = score_candidates(
-        candidates, query,
-        repo_index.call_graph,
-        repo_index.dependency_graph,
-        repo_index.symbol_index,
-        weights,
-        max_hops=settings.graph_max_hops,
-    )
-
-    # ACOR: rank + select within token budget
-    rank_result  = rank_and_select(scored, token_budget, settings)
-    context_text = build_context(rank_result.selected, repo_index.repo_root)
-    retrieval_ms = t_retrieval.stop_ms()
-
-    # LLM call
-    t_llm = LatencyTracker()
-    t_llm.start()
-    try:
-        llm_client = get_llm_client(settings)
-        llm_response = llm_client.generate(
-            SYSTEM_PROMPT,
-            build_user_prompt(request.query, query.intent, context_text),
-        )
-    except Exception as e:
-        from app.llm.providers import LLMResponse
-        llm_response = LLMResponse(
-            text=f"### Context Retrieved Successfully\n\nACOR retrieved and ranked {len(rank_result.selected)} relevant code snippets. (LLM provider note: {e})",
-            latency_ms=0.0,
-        )
-    llm_ms = t_llm.stop_ms()
-
-    retrieved_context = [
-        RetrievedContextItem(
-            symbol_name=c.name,
-            file_path=c.file_path,
-            start_line=c.start_line,
-            end_line=c.end_line,
-            snippet=c.snippet,
-            token_count=c.token_count,
-            score=c.score,
-        )
-        for c in rank_result.selected
-    ]
-
-    # Bug 1b fix: total_context_tokens should count the actual formatted context_text including headers
-    actual_context_tokens = count_tokens(context_text) if context_text else rank_result.total_tokens
-
-    return QueryResponse(
-        repo_id=repo_id,
-        query=request.query,
-        detected_intent=query.intent,
-        answer=llm_response.text,
-        retrieved_context=retrieved_context,
-        candidates_considered=len(candidates),
-        candidates_selected=len(rank_result.selected),
-        total_context_tokens=actual_context_tokens,
-        token_budget=token_budget,
-        naive_baseline_tokens=naive_baseline_tokens,
-        retrieval_latency_ms=retrieval_ms,
-        llm_latency_ms=llm_ms,
-    )
+@router.get(
+    "/repositories/{repo_id}/graph",
+    response_model=GraphInspectionResponse,
+)
+async def repository_graph(
+    repo_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    symbol: str | None = None,
+    max_hops: int = FastAPIQuery(default=2, ge=0, le=5),
+    limit: int = FastAPIQuery(default=20, ge=1, le=100),
+) -> GraphInspectionResponse:
+    repo_index = _get_repo_index(repo_id, settings)
+    return inspect_repository_graphs(repo_id, repo_index, symbol, max_hops, limit)

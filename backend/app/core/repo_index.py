@@ -1,21 +1,20 @@
-"""RepoIndex - bundles all per-repository in-memory data structures and
-handles serialisation to / deserialisation from disk.
-
-MVP design: graphs and symbol index are pickled; vector store persists
-itself (Chroma) or is rebuilt from saved embeddings (FAISS).
-Data is lost on restart for FAISS - switch VECTOR_DB_BACKEND=chroma for
-persistence across restarts.
-"""
+"""Per-repository in-memory structures with Qdrant-backed persistence."""
 from __future__ import annotations
+import os
 import pickle
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.config import Settings
 from app.graphs.call_graph import CallGraph
 from app.graphs.dependency_graph import DependencyGraph
 from app.graphs.symbol_index import SymbolIndex
 from app.retrieval.vector_store import VectorStore, get_vector_store
+
+if TYPE_CHECKING:
+    from qdrant_client import QdrantClient
 
 
 class RepoRootMissing(FileNotFoundError):
@@ -58,8 +57,24 @@ class RepoIndex:
             "file_token_counts": self.file_token_counts,
         }
         path = storage_dir / f"{self.repo_id}.pkl"
-        with open(path, "wb") as f:
-            pickle.dump(payload, f)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=storage_dir,
+                prefix=f".{self.repo_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temp_path = Path(f.name)
+                pickle.dump(payload, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        except Exception:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def load(
@@ -67,6 +82,7 @@ class RepoIndex:
         repo_id:     str,
         storage_dir: Path,
         settings:    Settings,
+        vector_client: QdrantClient | None = None,
     ) -> "RepoIndex":
         """Load from disk.  Raises FileNotFoundError if not indexed yet."""
         path = storage_dir / f"{repo_id}.pkl"
@@ -80,13 +96,12 @@ class RepoIndex:
                 f"Stored repository root '{payload['repo_root']}' is missing or is not a directory."
             )
         payload["repo_root"] = repo_root
-        vector_store = get_vector_store(settings, collection_name=repo_id)
-        vec_cache = storage_dir / f"{repo_id}.vectors.pkl"
-        if vec_cache.exists() and vector_store.count() == 0:
-            with open(vec_cache, "rb") as vf:
-                ids, all_vecs_np, metadatas = pickle.load(vf)
-            vector_store.add(ids, all_vecs_np, metadatas)
-        elif vector_store.count() == 0:
+        vector_store = get_vector_store(
+            settings,
+            collection_name=repo_id,
+            client=vector_client,
+        )
+        if vector_store.count() == 0:
             from app.graphs.symbol_index import SymbolKind
             from app.retrieval.embeddings import get_embedding_model
             import re
@@ -123,11 +138,6 @@ class RepoIndex:
                         all_vecs.append(embedding_model.encode(batch))
                     all_vecs_np = np.vstack(all_vecs)
                     vector_store.add(ids, all_vecs_np, metadatas)
-                    try:
-                        with open(vec_cache, "wb") as vf:
-                            pickle.dump((ids, all_vecs_np, metadatas), vf)
-                    except Exception:
-                        pass
 
         return cls(
             vector_store=vector_store,

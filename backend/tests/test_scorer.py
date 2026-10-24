@@ -176,3 +176,119 @@ def test_weights_of_zero_fully_exclude_a_component():
     for candidate in scored:
         expected = 0.5 * candidate.score.semantic + 0.5 * candidate.score.call_graph
         assert abs(candidate.score.composite - expected) < 1e-9
+
+
+def test_source_term_match_reranks_method_containing_specific_bug_behavior():
+    class_info = ClassInfo(
+        "org.example.CharSequenceTranslator",
+        "CharSequenceTranslator.java",
+        "CharSequenceTranslator",
+        "org.example",
+        1,
+        30,
+        [],
+    )
+    methods = [
+        MethodInfo(
+            "org.example.CharSequenceTranslator#translate(CharSequence,int,Writer)",
+            class_info.id,
+            "translate",
+            "translate(CharSequence,int,Writer)",
+            class_info.file_path,
+            1,
+            10,
+            ["public"],
+        ),
+        MethodInfo(
+            "org.example.CharSequenceTranslator#translate(CharSequence,Writer)",
+            class_info.id,
+            "translate",
+            "translate(CharSequence,Writer)",
+            class_info.file_path,
+            11,
+            20,
+            ["public"],
+        ),
+        MethodInfo(
+            "org.example.CharSequenceTranslator#translate(CharSequence)",
+            class_info.id,
+            "translate",
+            "translate(CharSequence)",
+            class_info.file_path,
+            21,
+            30,
+            ["public"],
+        ),
+    ]
+    candidates = [
+        Candidate(
+            method_id=methods[0].id,
+            class_id=class_info.id,
+            name="translate",
+            kind="method",
+            file_path=class_info.file_path,
+            start_line=1,
+            end_line=10,
+            snippet="public int translate(CharSequence input, int index, Writer out) { return 1; }",
+            token_count=20,
+            raw_semantic_score=0.9,
+        ),
+        Candidate(
+            method_id=methods[1].id,
+            class_id=class_info.id,
+            name="translate",
+            kind="method",
+            file_path=class_info.file_path,
+            start_line=11,
+            end_line=20,
+            snippet="public void translate(CharSequence input, Writer out) { // surrogate pairs }",
+            token_count=20,
+            raw_semantic_score=0.899,
+        ),
+        Candidate(
+            method_id=methods[2].id,
+            class_id=class_info.id,
+            name="translate",
+            kind="method",
+            file_path=class_info.file_path,
+            start_line=21,
+            end_line=30,
+            snippet="public String translate(CharSequence input) { return null; }",
+            token_count=20,
+            raw_semantic_score=0.0,
+        ),
+    ]
+    query = QueryAnalysis(
+        raw_query="fails on surrogate pairs",
+        intent=QueryIntentLabel.BUG_EXPLANATION,
+        anchor_symbols=set(),
+        query_tokens={"surrogate", "pairs"},
+    )
+    call_graph = CallGraph.build(methods, [])
+    dependency_graph = DependencyGraph.build([class_info], [])
+    symbol_index = SymbolIndex.build([class_info], methods)
+
+    scored = score_candidates(
+        candidates,
+        query,
+        call_graph,
+        dependency_graph,
+        symbol_index,
+        ACORWeights(),
+    )
+
+    assert scored[0].method_id == methods[1].id
+    assert scored[0].score.symbol > 0.0
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        {"semantic": -0.1, "call_graph": 0.4, "dependency": 0.3, "symbol": 0.4},
+        {"semantic": float("nan"), "call_graph": 0.0, "dependency": 0.0, "symbol": 1.0},
+        {"semantic": 0.0, "call_graph": 0.0, "dependency": 0.0, "symbol": 0.0},
+    ],
+)
+def test_invalid_acor_weights_are_rejected(weights):
+    with pytest.raises(ValueError):
+        ACORWeights(**weights)

@@ -1,4 +1,4 @@
-from app.llm.prompts import SYSTEM_PROMPT
+from app.llm.prompts import STRUCTURED_SYSTEM_PROMPT, SYSTEM_PROMPT
 
 
 def test_system_prompt_requires_plain_text_structured_answers():
@@ -16,3 +16,9 @@ def test_system_prompt_requires_plain_text_structured_answers():
     assert "Do not use Markdown headings, bold or italic emphasis" in SYSTEM_PROMPT
     assert 'numbered steps written as "1.", "2."' in SYSTEM_PROMPT
     assert 'say "Not shown in the provided excerpt."' in SYSTEM_PROMPT
+
+
+def test_structured_prompt_requires_json_and_limits_evidence():
+    assert "exactly one JSON object" in STRUCTURED_SYSTEM_PROMPT
+    assert "Do not invent file paths, line numbers, method names, causes, or fixes." in STRUCTURED_SYSTEM_PROMPT
+    assert STRUCTURED_SYSTEM_PROMPT.isascii()

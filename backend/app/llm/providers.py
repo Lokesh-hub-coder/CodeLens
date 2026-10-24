@@ -25,6 +25,7 @@ class LLMResponse:
     latency_ms: float
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class LLMClient(ABC):
@@ -65,6 +66,7 @@ class _OpenAICompatibleClient(LLMClient):
             latency_ms=latency_ms,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
         )
 
 
@@ -137,6 +139,7 @@ class GroqClient(LLMClient):
             latency_ms=latency_ms,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
         )
 
 
@@ -150,7 +153,7 @@ class MockLLMClient(LLMClient):
             "*(To enable live natural-language synthesis with Groq/GPT/Llama/Qwen, set a valid API key in `backend/.env`)*"
         )
         latency_ms = (time.perf_counter() - start) * 1000
-        return LLMResponse(text=text, latency_ms=latency_ms, prompt_tokens=100, completion_tokens=50)
+        return LLMResponse(text=text, latency_ms=latency_ms)
 
 
 def get_llm_client(settings: Settings) -> LLMClient:

@@ -12,9 +12,12 @@ exposed for direct testing by test_ranker.py.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from app.acor.context_builder import build_context
 from app.acor.scorer import ScoredCandidate
 from app.config import Settings
+from app.retrieval.tokenizer import count_tokens
 
 
 @dataclass
@@ -32,7 +35,7 @@ def _greedy_by_density(
     candidates:   list[ScoredCandidate],
     token_budget: int,
 ) -> set[str]:
-    """Select method IDs by descending composite/token_count density."""
+    """Select by density, while retaining the top-scoring candidate if it fits."""
     def density(c: ScoredCandidate) -> float:
         return c.score.composite / max(c.token_count, 1)
 
@@ -46,6 +49,24 @@ def _greedy_by_density(
         if used + c.token_count <= token_budget:
             selected.add(c.method_id)
             used += c.token_count
+
+    if candidates:
+        highest_scoring = max(candidates, key=lambda c: c.score.composite)
+        if (
+            highest_scoring.method_id not in selected
+            and highest_scoring.token_count <= token_budget
+        ):
+            for candidate in sorted(
+                (c for c in candidates if c.method_id in selected),
+                key=lambda c: c.score.composite,
+            ):
+                if used + highest_scoring.token_count <= token_budget:
+                    break
+                selected.remove(candidate.method_id)
+                used -= candidate.token_count
+            if used + highest_scoring.token_count <= token_budget:
+                selected.add(highest_scoring.method_id)
+
     return selected
 
 
@@ -106,35 +127,47 @@ def rank_and_select(
     if not candidates:
         return RankResult(selected=[], dropped=[], total_tokens=0)
 
-    # Choose solver
-    use_exact = (
-        settings.ranker_strategy == "exact"
-        or len(candidates) <= settings.exact_knapsack_max_candidates
-        and settings.ranker_strategy != "greedy"
-    )
-    # Prioritize top-scoring primary target candidates
-    sorted_by_composite = sorted(candidates, key=lambda c: c.score.composite, reverse=True)
-    must_have: set[str] = set()
-    budget_for_rest = token_budget
-    if sorted_by_composite and sorted_by_composite[0].score.composite >= 0.8:
-        primary = sorted_by_composite[0]
-        if primary.token_count <= token_budget:
-            must_have.add(primary.method_id)
-            budget_for_rest -= primary.token_count
+    # Keep one canonical item per method before either solver calculates cost.
+    unique_by_id: dict[str, ScoredCandidate] = {}
+    for candidate in candidates:
+        if candidate.token_count < 0:
+            raise ValueError(f"Candidate {candidate.method_id!r} has a negative token count")
+        existing = unique_by_id.get(candidate.method_id)
+        if existing is None or candidate.score.composite > existing.score.composite:
+            unique_by_id[candidate.method_id] = candidate
+    unique_candidates = list(unique_by_id.values())
 
-    pool = [c for c in candidates if c.method_id not in must_have]
+    # Account for file and method headers during ranking. The final formatted
+    # context is recounted below because multiple snippets in one file share
+    # a file header and tokenization can change at concatenation boundaries.
+    selection_items = [
+        ScoredCandidate(
+            **{
+                key: getattr(candidate, key)
+                for key in ScoredCandidate.__dataclass_fields__
+                if key != "score" and key != "token_count"
+            },
+            token_count=count_tokens(build_context([candidate], Path("."))),
+            score=candidate.score,
+        )
+        for candidate in unique_candidates
+    ]
 
-    if settings.ranker_strategy == "exact":
-        selected_ids = _exact_knapsack(pool, budget_for_rest) | must_have
+    if settings.ranker_strategy == "exact" and len(selection_items) <= settings.exact_knapsack_max_candidates:
+        selected_ids = _exact_knapsack(selection_items, token_budget)
     else:
-        selected_ids = _greedy_by_density(pool, budget_for_rest) | must_have
+        selected_ids = _greedy_by_density(selection_items, token_budget)
 
     selected = sorted(
-        [c for c in candidates if c.method_id in selected_ids],
+        [c for c in unique_candidates if c.method_id in selected_ids],
         key=lambda c: c.score.composite,
         reverse=True,
     )
-    dropped = [c for c in candidates if c.method_id not in selected_ids]
-    total_tokens = sum(c.token_count for c in selected)
+    while selected and count_tokens(build_context(selected, Path("."))) > token_budget:
+        selected.pop()
+
+    selected_ids = {c.method_id for c in selected}
+    dropped = [c for c in unique_candidates if c.method_id not in selected_ids]
+    total_tokens = count_tokens(build_context(selected, Path("."))) if selected else 0
 
     return RankResult(selected=selected, dropped=dropped, total_tokens=total_tokens)

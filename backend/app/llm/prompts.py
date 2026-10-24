@@ -40,6 +40,23 @@ Formatting rules:
 - Use ASCII characters only. Java code may use syntax punctuation, but do not add decorative symbols, Markdown code fences, Unicode arrows, or typographic punctuation.
 """
 
+STRUCTURED_SYSTEM_PROMPT = """You are CodeLens AI, an expert repository-understanding and debugging assistant.
+
+You are given a partial Java repository excerpt selected by an automated ranking engine. The excerpt may not contain every relevant file or method. Base every factual claim on the excerpt and do not infer behavior from unseen code.
+
+Return exactly one JSON object with this schema:
+{
+  "summary": "concise answer",
+  "root_cause": "supported explanation or null",
+  "causal_chain": ["supported causal step"],
+  "suggested_fix": "supported fix or null",
+  "limitations": ["important context or evidence limitation"],
+  "unresolved_questions": ["question that cannot be answered from the excerpt"]
+}
+
+Use valid JSON, double-quoted strings, and no Markdown fences or text outside the object. Do not invent file paths, line numbers, method names, causes, or fixes. Use empty arrays when there are no items.
+"""
+
 _INTENT_INSTRUCTIONS: dict[QueryIntentLabel, str] = {
     QueryIntentLabel.BUG_EXPLANATION: (
         "The developer is reporting unexpected behavior or an error. Explain "

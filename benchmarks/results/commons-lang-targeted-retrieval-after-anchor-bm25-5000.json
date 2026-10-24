@@ -1,0 +1,75 @@
+{
+  "report_version": 1,
+  "report_type": "targeted-retrieval-only",
+  "provenance": "Values transcribed from the completed targeted retrieval-only run recorded in this session; the run output did not persist a machine-readable report. Retrieval implementation includes the class-anchor candidate expansion and BM25 source-term scoring. No LLM was called.",
+  "token_budget": 5000,
+  "token_budget_type": "estimated formatted prompt tokens",
+  "provider_calls": 0,
+  "latency_ms": null,
+  "latency_limitation": "Per-task retrieval latency was not retained in the recorded run output.",
+  "tasks": [
+    {
+      "task_id": "defects4j-Lang-1-LANG-747",
+      "candidate_count": 94,
+      "gold_candidate_coverage": true,
+      "gold_method_rank": 1,
+      "recall_at_10": 1,
+      "reciprocal_rank": 1.0,
+      "estimated_prompt_tokens": 4376,
+      "provider_input_tokens": null
+    },
+    {
+      "task_id": "defects4j-Lang-3-LANG-693",
+      "candidate_count": 98,
+      "gold_candidate_coverage": true,
+      "gold_method_rank": 1,
+      "recall_at_10": 1,
+      "reciprocal_rank": 1.0,
+      "estimated_prompt_tokens": 4297,
+      "provider_input_tokens": null
+    },
+    {
+      "task_id": "defects4j-Lang-5-LANG-865",
+      "candidate_count": 55,
+      "gold_candidate_coverage": true,
+      "gold_method_rank": 1,
+      "recall_at_10": 1,
+      "reciprocal_rank": 1.0,
+      "estimated_prompt_tokens": 4565,
+      "provider_input_tokens": null
+    },
+    {
+      "task_id": "defects4j-Lang-6-LANG-857",
+      "candidate_count": 64,
+      "gold_candidate_coverage": true,
+      "gold_method_rank": 4,
+      "recall_at_10": 1,
+      "reciprocal_rank": 0.25,
+      "estimated_prompt_tokens": 4356,
+      "provider_input_tokens": null
+    },
+    {
+      "task_id": "defects4j-Lang-8-LANG-818",
+      "candidate_count": 161,
+      "gold_candidate_coverage": true,
+      "gold_method_rank": 53,
+      "recall_at_10": 0,
+      "reciprocal_rank": 0.018867924528301886,
+      "estimated_prompt_tokens": 3730,
+      "provider_input_tokens": null
+    }
+  ],
+  "aggregate": {
+    "task_count": 5,
+    "candidate_coverage_count": 5,
+    "recall_at_10": 0.8,
+    "mrr": 0.6537735849056604
+  },
+  "comparison_reference": {
+    "file": "commons-lang-final.json",
+    "condition": "acor",
+    "recall_at_10": 0.2,
+    "mrr": 0.21818181818181817,
+    "note": "Reference is the previously saved five-task ACOR baseline. This targeted run measured retrieval changes only; it is not an LLM or generation-quality comparison."
+  }
+}
