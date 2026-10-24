@@ -11,14 +11,14 @@ similarity, symbol overlap, call-graph proximity, and dependency-graph
 proximity under a formatted-context token budget. We evaluate the existing
 implementation on five patch-labelled Apache Commons Lang Defects4J bug
 tasks using whole-file, semantic-only, and ACOR retrieval, plus signal and
-selection ablations. The saved pilot reports Recall@10 of 0.4, 0.0, and
-0.2, respectively, and MRR of 0.267, 0.0, and 0.218. ACOR therefore does
-not outperform whole-file retrieval on these retrieval measures. Its
-paired provider-reported input usage is lower than whole-file in this
-sample, but estimated budgets did not perfectly predict provider token
-counts. With five tasks, some model-confounded ablation generations, and
-no change-impact gold labels, these observations are exploratory and do
-not support general effectiveness claims.
+selection ablations. The saved generation pilot reports Recall@10 of 0.4,
+0.0, and 0.2, respectively, and MRR of 0.267, 0.0, and 0.218. A later
+retrieval-only rerun, with no model requests, measured Recall@10 of 0.4,
+0.2, and 0.8 and MRR of 0.267, 0.200, and 0.654. The newer retrieval-only
+result is limited to the same five tasks and does not establish general
+effectiveness or explain the earlier generation outcomes. With five tasks,
+model-confounded generation ablations, and no change-impact gold labels,
+all observations remain exploratory.
 
 ## Method
 
@@ -70,13 +70,29 @@ rows are confounded.
 Source: [`../benchmarks/results/commons-lang-final.md`](../benchmarks/results/commons-lang-final.md)
 and its JSON/CSV companions.
 
-After targeted class-anchor expansion and BM25 source scoring, a separate
-retrieval-only run on the same five tasks at the same estimated budget
-measured Recall@10 0.8 and MRR 0.6538, with gold ranks 1, 1, 1, 4, and 53.
-This is evidence that the retrieval changes improved top-10 localization
-on this specific set, while LANG-818 still ranked outside the top ten.
-Per-task retrieval latency was not retained. This run did not call a model
-and does not revise the saved generation results above.
+The final reproducible retrieval-only run used the five pinned revisions,
+the same 5,000 estimated-token budget, and nine retrieval/ablation
+conditions. Whole-file / semantic-only / ACOR measured Recall@10
+0.4 / 0.2 / 0.8 and MRR 0.2667 / 0.2000 / 0.6538. Mean estimated prompt
+tokens were 4,814.6 / 4,259.4 / 4,264.2 and mean measured retrieval latency
+was 664.4 / 59.7 / 85.7 ms. ACOR gold candidate ranks before budget
+selection were 1, 1, 1, 4, and 62; selected-context positions were 1, 1,
+1, 4, and 53. LANG-818 remains outside the top ten.
+
+The run made no LLM/provider calls, so actual provider tokens and provider
+latency are not reported. A fresh ranking diagnosis found LANG-818 present
+in the 161-candidate pool but with no call-graph or dependency-graph score.
+An uncommitted class-anchor heuristic trial worsened its rank and was
+discarded. The previous targeted report records rank 53 without stating
+whether it is pre- or post-budget; its rank is therefore not directly
+comparable to the new full-candidate rank 62. These results are descriptive
+evidence on one five-task set, not a claim that retrieval changes improve
+general or model-generated localization.
+
+Source for this rerun:
+[`../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md`](../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md)
+and its JSON/CSV companions. It does not overwrite or revise the saved
+generation report above.
 
 ## Limitations and next steps
 

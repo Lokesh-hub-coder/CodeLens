@@ -70,15 +70,30 @@ def inspect_repository_graphs(
     matching_locations = []
     resolved_symbol = None
     if symbol:
-        lookup_names = [symbol, symbol.rsplit(".", 1)[-1]]
         if "#" in symbol:
-            lookup_names.append(symbol.split("#", 1)[1].split("(", 1)[0])
-        seen_ids: set[str] = set()
-        for lookup_name in lookup_names:
-            for location in repo_index.symbol_index.exact_lookup(lookup_name):
-                if location.symbol_id not in seen_ids:
-                    matching_locations.append(location)
-                    seen_ids.add(location.symbol_id)
+            method_name = symbol.split("#", 1)[1].split("(", 1)[0]
+            matching_locations = [
+                location
+                for location in repo_index.symbol_index.exact_lookup(method_name)
+                if location.symbol_id == symbol
+            ]
+        elif "(" in symbol:
+            method_name = symbol.split("(", 1)[0]
+            signature = symbol[symbol.index("("):]
+            matching_locations = [
+                location
+                for location in repo_index.symbol_index.exact_lookup(method_name)
+                if location.symbol_id.endswith(f"#{method_name}{signature}")
+            ]
+        elif "." in symbol:
+            class_name = symbol.rsplit(".", 1)[-1]
+            matching_locations = [
+                location
+                for location in repo_index.symbol_index.exact_lookup(class_name)
+                if location.symbol_id == symbol
+            ]
+        else:
+            matching_locations = repo_index.symbol_index.exact_lookup(symbol)
         if matching_locations:
             resolved_symbol = matching_locations[0].symbol_id
 

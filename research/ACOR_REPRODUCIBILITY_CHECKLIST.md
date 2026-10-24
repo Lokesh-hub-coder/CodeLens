@@ -56,7 +56,51 @@
 
 - Existing full pilot: `benchmarks/results/commons-lang-final.*`, 45/45
   task-condition rows; see [`../docs/evaluation.md`](../docs/evaluation.md).
-- Existing raw indexes available locally include
-  `backend/data/index/commons-lang-818-demo.pkl`, but the five-task
-  temporary state directory is absent. A new full five-task retrieval
-  matrix is therefore blocked until indexing is reproduced.
+- The five pinned checkouts matched their expected buggy revisions. Five
+  isolated worker re-indexes completed successfully: 537 Java source files,
+  11,060 methods, 0 unparsed files, and 81.55 seconds mean indexing time.
+  Earlier temporary worker failures (ONNX allocation and Qdrant write
+  timeout) did not recur; their original cause was not established.
+- The recovered combined state is outside the repository at
+  `%TEMP%\codelens-final-index-recovery\combined-state`. Its five Qdrant
+  collections and index pickles are verified; each vector point count
+  matched its source collection during assembly.
+- A fresh retrieval-only run completed 45/45 rows at the 5,000 estimated
+  token budget with no provider calls. Results are saved under
+  `benchmarks/results/commons-lang-final-completion-retrieval-only-5000.*`.
+  ACOR measured selected-context Recall@10 0.8 and MRR 0.6538; this five-task
+  pilot does not establish general superiority. See the Markdown report for
+  ablations, per-task ranks, token estimates, and measured local latency.
+
+## Recreate the indexes and retrieval-only report
+
+From the repository root, after Java, Maven, Python dependencies, and the
+parser JAR are available:
+
+```powershell
+$work = Join-Path $env:TEMP "codelens-lang-defects4j"
+$state = Join-Path $env:TEMP "codelens-lang-final-reproduction\state"
+python scripts\prepare_commons_lang_benchmark.py --workdir $work
+python scripts\index_commons_lang_benchmark.py `
+  --workdir $work `
+  --state-dir $state `
+  --tasks benchmarks\commons-lang-defects4j.json `
+  --report (Join-Path $state "indexing-results.json")
+python scripts\evaluate_retrieval.py `
+  --tasks benchmarks\commons-lang-defects4j.json `
+  --retrieval-only `
+  --include-ablations `
+  --token-budget 5000 `
+  --storage-dir $state `
+  --indexing-results (Join-Path $state "indexing-results.json") `
+  --output benchmarks\results\commons-lang-reproduction-retrieval-only.json `
+  --csv-output benchmarks\results\commons-lang-reproduction-retrieval-only.csv
+```
+
+The index script processes repositories serially and persists an indexing
+report after each worker. Verify all five task IDs have `status: success`,
+`unparsed_files: []`, and the expected revision before evaluation. The
+reproduction filenames above are separate from the saved original and
+final-completion reports; choose another new output basename if they
+already exist. The five revision hashes and label sources are in
+[`../benchmarks/commons-lang-defects4j.json`](../benchmarks/commons-lang-defects4j.json).

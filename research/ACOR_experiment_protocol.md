@@ -105,9 +105,30 @@ provider quota. Save to a new file, not over an existing report:
 python ..\scripts\evaluate_retrieval.py --tasks ..\benchmarks\commons-lang-defects4j.json --include-ablations --token-budget 5000 --request-delay-seconds 60 --storage-dir "$env:TEMP\codelens-lang-defects4j\state" --indexing-results "$env:TEMP\codelens-lang-defects4j\state\indexing-results.json" --output ..\benchmarks\results\commons-lang-groq-new.json
 ```
 
-Check missing index prerequisites before running. The five-repository
-temporary index directory was not present during the current audit. The
-previous targeted retrieval-only result after class-anchor/BM25 changes is
-preserved at
-[`../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md`](../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md);
-no new matrix was run during this audit.
+## Reproduced retrieval-only results
+
+A new 45-row retrieval-only matrix was run on the five pinned revisions at
+the shared 5,000 estimated-token budget. It made no model requests; actual
+provider input tokens are therefore unavailable. All five indexes had
+zero unparsed Java files. Whole-file / semantic-only / ACOR measured
+Recall@10 **0.4 / 0.2 / 0.8**, MRR **0.2667 / 0.2000 / 0.6538**, and
+budgeted-context coverage **2/5 / 1/5 / 5/5**. Mean estimated prompt tokens
+were **4,814.6 / 4,259.4 / 4,264.2**; mean measured retrieval latency was
+**664.4 / 59.7 / 85.7 ms**.
+
+ACOR full-candidate gold ranks were **1, 1, 1, 4, 62**; budgeted-context
+positions were **1, 1, 1, 4, 53**. The LANG-818 gold method is in the
+candidate pool but outside the top ten. Its exact current score breakdown
+and why its graph signals are zero are documented in
+[`../docs/ACOR_LANG818_ROOT_CAUSE_VALIDATION.md`](../docs/ACOR_LANG818_ROOT_CAUSE_VALIDATION.md).
+
+The saved results are
+[`../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md`](../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md)
+and its JSON/CSV siblings. The earlier targeted result remains preserved
+at
+[`../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md`](../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md).
+The new measurement agrees with the earlier selected-context Recall@10 and
+MRR, but its full-candidate LANG-818 rank is 62; the earlier file does not
+specify whether rank 53 is pre- or post-budget. The unchanged historical
+generation report remains separate and is not evidence of model-answer
+improvement from this retrieval-only run.
