@@ -52,6 +52,46 @@ the benchmark gold label. Retrieval rankings are evidence of localization,
 not proof that an LLM answer is causally correct. No new provider call was
 made for this source validation.
 
+## Reproduced retrieval rank and scoring evidence
+
+The final five-task retrieval-only rerun used the pinned buggy revision and
+the exact query in `benchmarks/commons-lang-defects4j.json`. The gold method
+was present in the 161-candidate ACOR pool. Its full-candidate rank before
+budget selection was **62**; it appeared at position **53** in the final
+selected context. The query analyzer extracted only the class anchor
+`FastDateFormat`; `_resolve_anchors` therefore returned no method anchors.
+
+The measured gold score was semantic **0.8357**, call-graph **0.0**,
+dependency **0.0**, symbol **0.5**, composite **0.459261**. The gold method
+has no incoming or outgoing call-graph edge in this parsed index, so the
+call-graph score is necessarily zero. The dependency graph has no path from
+its `FastDatePrinter.TimeZoneNameRule` class to `FastDateFormat`, so its
+dependency score is zero. The symbol score is the existing class-name
+overlap with the enclosing `FastDatePrinter` class.
+
+The top ten scored candidates were `FastDateFormat` methods with composite
+scores between **0.7484** and **0.7705**; those candidates matched the
+class anchor exactly and received dependency and symbol scores of **1.0**.
+Thus candidate generation succeeds, but the scoring signals over-prioritize
+methods in the explicitly named class relative to the relevant method in a
+similarly named neighboring implementation class. The parser's current
+call graph does not encode dispatch from the `Rule` interface to this
+concrete implementation.
+
+A diagnostic trial propagated one automatically selected similar
+same-package class anchor. On the five tasks it changed LANG-818's
+full-candidate rank from 62 to 67 and selected-context position from 53 to
+55; it was not adopted. This did not provide a justified improvement.
+No speculative score boost or LANG-818-specific rule was committed.
+The limitation is unresolved pending a general, validated treatment of
+class-only anchors and interface dispatch.
+
+The older targeted report records `gold_method_rank: 53` without specifying
+whether that value is before or after budget selection. The current run
+measures both stages separately, so do not compare those fields as if they
+were the same metric. Complete row-level results are in
+[`../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md`](../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md).
+
 ## Reproduction
 
 In the temporary pinned checkout, inspect the two revisions with:

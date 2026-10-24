@@ -51,13 +51,16 @@ was resolved or that a graph edge alone changes top-k retrieval.
 
 `backend/tests/test_verification_batch.py::test_graph_endpoint_reports_edges_near_resolved_symbol`
 asserts a sample caller edge and dependency edge returned around
-`changedMethod`; the test fixture explicitly builds those edges. The MCP
-stdio integration test also checks `codelens_graph_inspect` symbol lookup.
+the exact ID `com.foo.A#changedMethod()`; the test fixture explicitly
+builds those edges. A second regression fixture contains the same method
+name in two classes and verifies a fully qualified ID does not fall back
+to the first same-name declaration. The MCP stdio integration test also
+checks `codelens_graph_inspect` symbol lookup by simple name.
 
 Run from `backend/`:
 
 ```powershell
-python -m pytest tests\test_verification_batch.py::test_graph_endpoint_reports_edges_near_resolved_symbol tests\test_mcp_server.py -q
+python -m pytest tests\test_verification_batch.py tests\test_mcp_server.py -q
 ```
 
 Graph counts are exposed by
@@ -65,3 +68,9 @@ Graph counts are exposed by
 No unbounded edge dump is returned. The API currently reports the stored
 graph's node/edge counts, not a parser resolution percentage; use labelled
 fixtures for precision/recall.
+
+The live API probe with the recovered LANG-818 index resolved
+`org.apache.commons.lang3.time.FastDateFormat#format(Calendar,StringBuffer)`
+to that exact method and returned the delegation edges to
+`FastDatePrinter#format(Calendar,StringBuffer)` and its nearby methods.
+Use the full indexed method signature when querying overloaded methods.

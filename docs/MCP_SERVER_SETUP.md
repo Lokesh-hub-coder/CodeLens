@@ -12,7 +12,7 @@ python -m uvicorn app.main:app --reload
 
 In Swagger at `http://localhost:8000/docs`, check
 `GET /repositories/{repo_id}/status` before querying. For the saved Lang
-index:
+index alias (when it exists in the server's configured storage):
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/repositories/commons-lang-818-demo/status
@@ -33,14 +33,33 @@ Example body:
 }
 ```
 
-The current workspace's persisted index returned `indexed: true` with 2,151
-methods and 155 classes when loaded from `backend/`. If it is unavailable,
-the status response includes an `error_code` distinguishing
-`repository_not_indexed` from `repository_source_unavailable`. That result cannot
-prove what a separately running server has loaded. If the server status
-is false, verify its working directory and `INDEX_STORAGE_DIR` first. An
-index file without its source checkout is reported as unavailable (HTTP
-410 on query); provide the valid checkout and re-index only if needed.
+The `repo_id` must match the index filename (without `.pkl`) in the running
+server's configured `INDEX_STORAGE_DIR`. For example, the recovered
+five-task benchmark state uses `lang-8-cfab1e4f`, not
+`commons-lang-818-demo`. In a live test using that explicit state,
+`commons-lang-818-demo/status` correctly returned
+`repository_not_indexed`, while `lang-8-cfab1e4f/status` returned
+`indexed: true` with 2,151 methods. The separate
+`backend/data/index/commons-lang-818-demo.pkl` is a different index alias;
+a separately running server may use a different storage directory.
+
+If status is false, inspect the response's `error_code` and verify the
+server working directory and `INDEX_STORAGE_DIR` before reindexing.
+`repository_not_indexed` means the configured directory has no matching
+index. `repository_source_unavailable` means the index exists but its
+stored source checkout is gone (HTTP 410 on query). Restore the correct
+checkout rather than reindexing if the persisted index is otherwise valid.
+
+Graph-inspection requests should use exact indexed method identifiers for
+overloaded methods, for example:
+
+```text
+GET /repositories/lang-8-cfab1e4f/graph?symbol=org.apache.commons.lang3.time.FastDateFormat%23format%28Calendar%2CStringBuffer%29
+```
+
+The API resolves this to the exact method ID. Simple class/method names
+remain supported, but an ambiguous short name can resolve to multiple
+declarations.
 
 ## Configure a stdio MCP client
 

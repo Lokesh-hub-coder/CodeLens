@@ -205,32 +205,91 @@ quality result or a general superiority claim. Per-task latency was not
 retained by the earlier run; it is left null in the new targeted report
 rather than inferred. The values and provenance are in
 [`../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md`](../benchmarks/results/commons-lang-targeted-retrieval-after-anchor-bm25-5000.md)
-and its JSON/CSV siblings. The temporary state containing all five indexes
-is currently absent, so this audit did not rerun the matrix.
+and its JSON/CSV siblings. At that point the five-index temporary state was
+unavailable. It was subsequently reconstructed in a new temporary directory
+and the retrieval-only matrix was rerun; the saved results are described
+below. The prior report was not overwritten.
+
+## Final reproducible retrieval-only rerun
+
+The five pinned checkouts were present and their HEAD revisions matched the
+task manifest. Re-indexing each checkout serially succeeded with 0 unparsed
+Java files; the individual indexing times averaged 81.55 seconds. The
+verified Qdrant vectors and graph/index pickles were assembled into a fresh
+temporary state at
+`%TEMP%\codelens-final-index-recovery\combined-state`. The earlier worker
+reports had included ONNX memory allocation and Qdrant write-timeout
+failures; retries in isolated per-repository storage succeeded, but the
+cause of those earlier transient failures was not established.
+
+The new retrieval-only run completed **45/45** task-condition rows with no
+failures and made no provider calls. Whole-file / semantic-only / ACOR
+Recall@10 was **0.4 / 0.2 / 0.8**, with MRR **0.2667 / 0.2000 / 0.6538**.
+Budgeted-context gold coverage was **2/5 / 1/5 / 5/5**. Mean estimated
+prompt tokens were **4,814.6 / 4,259.4 / 4,264.2**, corresponding to
+estimated reductions against whole-file of **0% / 11.6% / 11.5%**.
+Mean measured retrieval latency was **664.4 / 59.7 / 85.7 ms**; mean total
+condition latency was **666.8 / 61.9 / 87.8 ms**. Actual provider input
+tokens are null because no provider was invoked.
+
+| Condition | Recall@10 | MRR | Context coverage | Mean estimated tokens | Mean retrieval ms |
+|---|---:|---:|---:|---:|---:|
+| Whole-file | 0.40 | 0.2667 | 2/5 | 4,814.6 | 664.4 |
+| Semantic-only | 0.20 | 0.2000 | 1/5 | 4,259.4 | 59.7 |
+| ACOR | 0.80 | 0.6538 | 5/5 | 4,264.2 | 85.7 |
+
+The ACOR signal ablation without call-graph scoring measured Recall@10
+0.60/MRR 0.4538; disabling semantic, symbol, or dependency scoring retained
+Recall@10 0.80 in this five-task set. Exact selection measured Recall@10
+0.40/MRR 0.2537 and 146.4 ms mean retrieval latency; greedy measured
+Recall@10 0.80/MRR 0.6538 and 85.7 ms. These are descriptive pilot results,
+not statistical evidence or general superiority claims.
+
+The new report gives LANG-818 full-candidate rank 62 and budgeted-context
+rank 53. The earlier targeted report recorded rank 53 without specifying
+the ranking stage, so those rank fields are not assumed to be directly
+comparable. Full per-task rows, candidate counts, estimated tokens,
+latencies, index timing, and reproducible commands are in
+[`../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md`](../benchmarks/results/commons-lang-final-completion-retrieval-only-5000.md)
+and its adjacent JSON/CSV files. The older `commons-lang-final.*`
+generation reports remain unchanged; they report model outcomes and are
+not replaced by this retrieval-only run.
 
 ## Validation status (2026-10-24)
 
-- `python -m pytest tests -q` from `backend/`: **97 passed**, one
-  Starlette deprecation warning. This includes both MCP tools over the
--  MCP SDK client/server transport; `tests\test_mcp_server.py` separately
-  includes a spawned stdio server process and client for both query tools.
-- Focused API/MCP/prompt command:
-  `python -m pytest tests\test_verification_batch.py tests\test_mcp_server.py tests\test_prompts.py -q`
-  — **22 passed** before the spawned-process test was added. The final full
-  suite above includes the spawned-process test.
-- `$env:MAVEN_OPTS="-Xms32m -Xmx384m -XX:ActiveProcessorCount=2"; mvn
-  -f parser-service\pom.xml -q -T 1 -DforkCount=0 test`: **passed, 3 parser
-  tests**. The labelled fixture has 6 expected
+- `python -m pytest tests -q` from `backend/`: final result recorded in
+  `project.md` and `FINAL_COMPLETION_REPORT.md`: **98 passed**, one
+  Starlette deprecation warning.
+- `python -m pytest tests\test_mcp_server.py -q` from `backend/`:
+  **2 passed**, including a spawned stdio server/client test invoking both
+  query tools.
+- `python -m pytest tests\test_verification_batch.py -q` from `backend/`:
+  **21 passed**, including exact qualified graph-symbol resolution.
+- `mvn -f parser-service\pom.xml -q -T 1 -DforkCount=0 test` from the
+  repository root: **3 parser tests, 0 failures**. The labelled fixture has 6 expected
   in-repository edges and 6 returned: precision **6/6 = 100%**, recall
   **6/6 = 100%**. Two resolved JDK calls were correctly excluded.
+- `git diff --check` passed; Git reported only existing LF/CRLF working-copy
+  warnings.
 - The five gold method IDs were each present when parsing the individual
   affected source file from its Defects4J buggy revision; these targeted
   parses each reported 0 unparsed files. This checks label spelling and
   source-level parseability only, not whole-project retrieval quality.
-- The stored `commons-lang-818-demo` index loaded via a local TestClient
-  status request from `backend/`: **200, indexed=true, 2,151 methods, 155
-  classes**. The live Swagger process was not available, so the user's
-  separate process working directory/configuration remains unverified.
+- An isolated Uvicorn process was started from `backend/` with
+  `INDEX_STORAGE_DIR` and `QDRANT_PATH` pointed at the recovered temporary
+  state and `LLM_PROVIDER=mock`. The configured state returned
+  `repository_not_indexed` for `commons-lang-818-demo` (that alias is not in
+  this state), and `indexed=true`, 2,151 methods for `lang-8-cfab1e4f`.
+  A temporary missing-root fixture returned
+  `repository_source_unavailable`. A local query returned HTTP 200 with a
+  Pydantic-validated structured test response, 80 evidence items, 3,721
+  context tokens within the 5,000-token budget, and null provider usage.
+  The test-only fake client did not call Groq or any other provider.
+- The same live API returned the correct graph edges for the exact
+  `FastDateFormat#format(Calendar,StringBuffer)` method ID and exposed the
+  expected `QueryResponse`, `EvidenceReference`, `GraphInspectionResponse`,
+  and `StructuredAnalysisAnswer` schemas in OpenAPI. A wrong-symbol
+  fallback was found and fixed; see the final completion report.
 - The stored LANG-818 pickle graph has 2,143 call nodes/1,866 edges and 155
   dependency nodes/135 edges; these are graph storage counts, not call-graph
   precision/recall. The labelled Java fixture remains 6/6 precision and
@@ -263,11 +322,11 @@ container engine is required for Docker validation. The IDE check can be
 performed after the MCP client/server test on an editor that supports the
 documented stdio MCP configuration.
 
-The full five-task index state under the temporary directory described by
-the command examples is not present in the current workspace. Only local
-indexes such as `backend\data\index\commons-lang-818-demo.pkl` remain. No
-new five-task retrieval matrix was run or written during the API/MCP audit;
-existing `commons-lang-final` reports were preserved.
+The reconstructed five-task state is temporary and remains outside the
+repository at `%TEMP%\codelens-final-index-recovery\combined-state`. The
+new no-LLM retrieval-only results are persisted at
+`benchmarks/results/commons-lang-final-completion-retrieval-only-5000.*`.
+The existing `commons-lang-final` generation reports were preserved.
 
 The old parser "13%" figure should not be called recall. The parser source
 defines its graph-signal percentage as in-repository edges divided by all

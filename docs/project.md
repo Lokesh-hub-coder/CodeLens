@@ -6,7 +6,7 @@
 ## Implemented and locally verified
 
 - Backend regression suite after the API/MCP response and graph updates:
-  `python -m pytest tests -q` — **97 passed, 1 Starlette deprecation
+  `python -m pytest tests -q` — **98 passed, 1 Starlette deprecation
   warning**.
 - Parser tests: `mvn -f parser-service\pom.xml -q -T 1 -DforkCount=0 test`
   and `package` both succeeded; **3 parser tests, 0 failures**. The
@@ -14,11 +14,12 @@
   out of 6 expected (precision **100%**, recall **100%**) and correctly
   omitted 2 external JDK calls.
 - All five Defects4J labels were present when parsing only their affected
-  source file; each produced 0 unparsed files. Parsing the complete 108-file
-  Lang 1 buggy checkout did not complete: the 256-MB JVM attempt ran for
-  more than 6 minutes without output and was stopped. Earlier larger-heap
-  attempts failed on native memory allocation. This is not a full-repository
-  validation or a measured project-wide graph recall.
+  source file; each produced 0 unparsed files. In the final pass, all five
+  complete pinned checkouts were indexed serially: 537 Java source files,
+  11,060 methods, 0 unparsed files, and 81.55 seconds mean indexing time
+  per repository. Earlier temporary workers had reported ONNX memory
+  allocation and Qdrant write-timeout failures; the isolated retries
+  succeeded, but the earlier transient failure cause was not established.
 - Parser source-root discovery now covers nested Maven/Gradle `src/main/java`,
   `src/test/java`, and `src/integrationTest/java` layouts, with an optional
   host path-separated `PARSER_CLASSPATH` for dependency JARs and source dirs.
@@ -65,9 +66,12 @@
   errors are explicitly represented; no specific IDE was launched or
   certified.
 - Read-only graph endpoint `GET /repositories/{repo_id}/graph` returns
-  node/edge counts and bounded edges near a resolved symbol. The local
-  `commons-lang-818-demo` pickle contains 2,143 call nodes/1,866 graph
-  edges, 155 dependency nodes/135 edges, and 2,298 symbol entries.
+  node/edge counts and bounded edges near a resolved symbol. Qualified
+  method IDs now resolve by exact symbol ID rather than falling back to the
+  first repository-wide method with the same name; a regression test covers
+  duplicate method names. The local `commons-lang-818-demo` pickle contains
+  2,143 call nodes/1,866 graph edges, 155 dependency nodes/135 edges, and
+  2,298 symbol entries.
 - Repository status responses distinguish a missing index from an
   unavailable stored source checkout using `error_code` and `message`;
   this makes the reported Swagger 404 actionable without forcing a
@@ -79,10 +83,12 @@
 ## Security and cleanup findings
 
 - Local `.env` files are ignored and were not found among tracked paths or
-  the scanned Git history. A scan of 126 historical Git blobs found no
-  tracked `.env` paths or probable secret matches for common API-key,
-  credential, and private-key patterns. Heuristic scans cannot prove that
-  no secret was ever committed.
+  the scanned Git history. A scan of 208 text blobs across 421 reachable
+  Git objects found no tracked or historical `.env` paths and no
+  recognizable private-key, GitHub, Groq, or AWS token patterns. Three
+  generic credential-assignment matches were reviewed as configuration
+  plumbing or an example variable, not literal credentials. Heuristic scans
+  cannot prove that no secret was ever committed.
 - Release ZIP creation archives committed `HEAD`, applies export-ignore
   rules, and rejects sensitive paths and probable secret values. The
   validation run produced a 95-entry ZIP with no excluded paths or detected
@@ -99,14 +105,17 @@
 ## Measurements
 
 The labelled fixture's call-graph precision/recall above is the only
-ground-truth graph measurement. The saved Commons Lang pilot has five
-bug-localization tasks and 45 successful generation conditions. It reports
-actual provider token/latency values where returned, separately from local
-estimates; see `evaluation.md` for the results and model-mix caveats. A
-later retrieval-only run after class-anchor/BM25 changes measured Recall@10
-0.8 and MRR 0.6538 on the same five tasks; LANG-818 remained rank 53 and
-per-task retrieval latency was not retained. Its result is separately
-preserved and is not an LLM evaluation.
+ground-truth graph measurement. The saved Commons Lang generation pilot
+has five bug-localization tasks and 45 successful generation conditions;
+it reports actual provider token/latency values where returned, separately
+from local estimates. A fresh retrieval-only run also completed 45/45
+task-condition rows without provider calls. It measured whole-file /
+semantic-only / ACOR Recall@10 **0.4 / 0.2 / 0.8**, MRR
+**0.2667 / 0.2000 / 0.6538**, and mean retrieval latency
+**664.4 / 59.7 / 85.7 ms**. Candidate-pool coverage was 5/5; LANG-818's
+full-candidate rank was 62 and its budgeted-context position was 53.
+See `evaluation.md` and the new retrieval-only report for per-task and
+ablation results. Five tasks do not support a general superiority claim.
 
 ## Remaining limitations
 
@@ -134,11 +143,14 @@ preserved and is not an LLM evaluation.
 - No IDE-specific MCP validation or production readiness assessment is
   claimed. Docker image build/run remains pending until a real container
   engine is available.
-- During this validation, the current backend-working-directory probe
-  returned `indexed: true` for `commons-lang-818-demo` (2,151 methods, 155
-  classes). A separate running server can still return "not indexed" if it
-  uses another working directory or `INDEX_STORAGE_DIR`; call the
-  repository status endpoint on that server before reindexing.
+- During live API validation with the explicit recovered benchmark
+  `INDEX_STORAGE_DIR`, `/repositories/commons-lang-818-demo/status` returned
+  `repository_not_indexed` because that alias is not in this five-task
+  state; `/repositories/lang-8-cfab1e4f/status` returned indexed with 2,151
+  methods. The separate local `backend/data/index` contains the
+  `commons-lang-818-demo` pickle. A separately running server can return
+  either result depending on its configured index directory; check that
+  server's status endpoint before reindexing.
 
 See [`../README.md`](../README.md) for setup,
 [`architecture.md`](architecture.md) for implementation boundaries, and

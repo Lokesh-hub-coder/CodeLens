@@ -6,6 +6,7 @@
 """
 from pathlib import Path
 import os
+from types import SimpleNamespace
 import numpy as np
 import pytest
 from fastapi import HTTPException
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.api import routes
 from app.config import Settings, get_settings
 from app.core import candidate_pipeline
-from app.core.query_service import _INTENT_WEIGHTS
+from app.core.query_service import _INTENT_WEIGHTS, inspect_repository_graphs
 from app.core import repo_index as repo_index_module
 from app.core.candidate_pipeline import (
     generate_change_impact_candidates,
@@ -390,7 +391,7 @@ def test_graph_endpoint_reports_edges_near_resolved_symbol(query_client):
     client, _, repo_id, _ = query_client
     response = client.get(
         f"/repositories/{repo_id}/graph",
-        params={"symbol": "changedMethod", "max_hops": 2},
+        params={"symbol": "com.foo.A#changedMethod()", "max_hops": 2},
     )
 
     assert response.status_code == 200, response.text
@@ -406,6 +407,62 @@ def test_graph_endpoint_reports_edges_near_resolved_symbol(query_client):
     assert result["dependency_edges_near_symbol"] == [
         {"source": "com.foo.A", "target": "com.foo.B"}
     ]
+
+
+def test_graph_inspection_resolves_qualified_method_id_without_name_fallback():
+    classes = [
+        ClassInfo("com.foo.A", "A.java", "A", "com.foo", 1, 4, []),
+        ClassInfo("com.foo.B", "B.java", "B", "com.foo", 1, 3, []),
+    ]
+    methods = [
+        MethodInfo(
+            "com.foo.A#changedMethod()",
+            "com.foo.A",
+            "changedMethod",
+            "changedMethod()",
+            "A.java",
+            2,
+            2,
+            [],
+        ),
+        MethodInfo(
+            "com.foo.A#callerMethod()",
+            "com.foo.A",
+            "callerMethod",
+            "callerMethod()",
+            "A.java",
+            3,
+            3,
+            [],
+        ),
+        MethodInfo(
+            "com.foo.B#changedMethod()",
+            "com.foo.B",
+            "changedMethod",
+            "changedMethod()",
+            "B.java",
+            2,
+            2,
+            [],
+        ),
+    ]
+    repo_index = SimpleNamespace(
+        call_graph=CallGraph.build(
+            methods,
+            [CallEdge("com.foo.A#callerMethod()", "com.foo.A#changedMethod()")],
+        ),
+        dependency_graph=DependencyGraph.build(classes, []),
+        symbol_index=SymbolIndex.build(classes, methods),
+    )
+
+    result = inspect_repository_graphs(
+        "graph-resolution-test",
+        repo_index,
+        "com.foo.B#changedMethod()",
+    )
+
+    assert result.resolved_symbol == "com.foo.B#changedMethod()"
+    assert result.call_graph_edges_near_symbol == []
 
 
 def test_missing_source_checkout_is_not_reported_as_unindexed(
