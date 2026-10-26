@@ -64,6 +64,15 @@ class CallGraph:
             return 0.0
         return max(0.0, 1.0 - (min(reachable) / max_hops))
 
+    def callers_within_hops(self, method_id: str, hops: int = 1) -> set[str]:
+        """Directed reverse BFS: who calls method_id, transitively up to `hops`.
+        For change-impact analysis where callers are impacted by a change."""
+        if method_id not in self.graph:
+            return set()
+        reversed_g = self.graph.reverse(copy=False)
+        lengths = nx.single_source_shortest_path_length(reversed_g, method_id, cutoff=hops)
+        return {node for node in lengths if node != method_id}
+
     def neighbors_within_hops(self, method_id: str, hops: int = 1, max_hops: int | None = None) -> set[str]:
         """Undirected k-hop neighborhood -- used when the ranker wants to
         pull in short signature-only stubs of a selected method's direct

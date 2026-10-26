@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,47 +92,53 @@ def parse_repository(repo_path: Path, settings: Settings) -> ParsedRepo:
             f"cd parser-service && mvn -q package"
         )
 
-    output_path = repo_path / ".codelens-parse-output.json"
-    command = [
-        settings.java_bin,
-        "-jar",
-        str(jar_path),
-        str(repo_path),
-        str(output_path),
-    ]
+    with tempfile.TemporaryDirectory(prefix="codelens-parser-") as temp_dir:
+        output_path = Path(temp_dir) / "parse-output.json"
+        command = [
+            settings.java_bin,
+            f"-Xmx{settings.parser_max_heap_mb}m",
+            f"-XX:ActiveProcessorCount={settings.parser_active_processor_count}",
+            "-XX:+UseSerialGC",
+            "-jar",
+            str(jar_path),
+            str(repo_path),
+            str(output_path),
+            settings.parser_classpath,
+            str(settings.exclude_test_sources).lower(),
+        ]
 
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=settings.parser_timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise JavaParserError(
-            f"parser-service timed out after {settings.parser_timeout_seconds}s "
-            f"on {repo_path}. Large monorepos may need PARSER_TIMEOUT_SECONDS raised."
-        ) from exc
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=settings.parser_timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise JavaParserError(
+                f"parser-service timed out after {settings.parser_timeout_seconds}s "
+                f"on {repo_path}. Large monorepos may need PARSER_TIMEOUT_SECONDS raised."
+            ) from exc
 
-    if completed.returncode != 0:
-        raise JavaParserError(
-            f"parser-service exited with code {completed.returncode}.\n"
-            f"stdout: {completed.stdout[-2000:]}\nstderr: {completed.stderr[-2000:]}"
-        )
+        if completed.returncode != 0:
+            raise JavaParserError(
+                f"parser-service exited with code {completed.returncode}.\n"
+                f"stdout: {completed.stdout[-2000:]}\nstderr: {completed.stderr[-2000:]}"
+            )
 
-    if not output_path.exists():
-        raise JavaParserError(
-            "parser-service reported success but produced no output file "
-            f"at {output_path}"
-        )
+        if not output_path.exists():
+            raise JavaParserError(
+                "parser-service reported success but produced no output file "
+                f"at {output_path}"
+            )
 
-    try:
-        raw = json.loads(output_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise JavaParserError(f"parser-service output was not valid JSON: {exc}") from exc
-    finally:
-        output_path.unlink(missing_ok=True)
+        try:
+            raw = json.loads(output_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise JavaParserError(
+                f"parser-service output was not valid JSON: {exc}"
+            ) from exc
 
     return _deserialize(raw)
 

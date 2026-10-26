@@ -1,4 +1,13 @@
-# CodeLens — Full Codebase Audit Report
+# Historical CodeLens audit (superseded)
+
+> This document describes an earlier repository state and is not an
+> accurate inventory of the current implementation. In particular, its
+> statements that the ACOR/API/MCP modules are missing and that FAISS or
+> Chroma is used are obsolete. For the current verified state and
+> limitations, see [`project.md`](project.md),
+> [`architecture.md`](architecture.md), and [`evaluation.md`](evaluation.md).
+
+The historical snapshot below is retained for change history only.
 
 ---
 

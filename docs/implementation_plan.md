@@ -1,4 +1,9 @@
-# CodeLens — Architecture Gap Analysis & Phase-wise Implementation Plan
+# Historical CodeLens implementation plan (superseded)
+
+> This plan describes an earlier implementation stage. Its missing-module
+> and FAISS/Chroma status entries are obsolete. Use [`project.md`](project.md)
+> for the current audit and [`architecture.md`](architecture.md) for the
+> maintained implementation description.
 
 ---
 

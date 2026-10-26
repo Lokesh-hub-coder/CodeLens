@@ -1,0 +1,92 @@
+[
+  {
+    "id": "defects4j-Lang-1-LANG-747",
+    "repo_id": "lang-1-396afc3e",
+    "type": "bug_localization",
+    "query": "NumberUtils does not handle Long hexadecimal numbers.",
+    "bug_gold_ids": [
+      "org.apache.commons.lang3.math.NumberUtils#createNumber(String)"
+    ],
+    "source": {
+      "dataset": "Defects4J 2.x Lang",
+      "bug_id": 1,
+      "issue": "LANG-747",
+      "buggy_revision": "396afc3e4693cfee182efe582455f2d97058c068",
+      "fixed_revision": "d1a45e9738de5b3e299bb51e987565dcce55fee6",
+      "fix_patch": "https://github.com/apache/commons-lang/commit/d1a45e9738de5b3e299bb51e987565dcce55fee6.patch",
+      "label_basis": "The fix changes NumberUtils.createNumber(String); method label manually reviewed against the patch."
+    }
+  },
+  {
+    "id": "defects4j-Lang-3-LANG-693",
+    "repo_id": "lang-3-64cfee77",
+    "type": "bug_localization",
+    "query": "NumberUtils.createNumber loses precision for floating-point numbers requiring Double or BigDecimal.",
+    "bug_gold_ids": [
+      "org.apache.commons.lang3.math.NumberUtils#createNumber(String)"
+    ],
+    "source": {
+      "dataset": "Defects4J 2.x Lang",
+      "bug_id": 3,
+      "issue": "LANG-693",
+      "buggy_revision": "64cfee77e333d0c31a0fde0abe6dac3d97b0f078",
+      "fixed_revision": "8a1042959df80c06dbfa83896594caa8e20ff9d6",
+      "fix_patch": "https://github.com/apache/commons-lang/commit/8a1042959df80c06dbfa83896594caa8e20ff9d6.patch",
+      "label_basis": "The fix changes NumberUtils.createNumber(String); method label manually reviewed against the patch."
+    }
+  },
+  {
+    "id": "defects4j-Lang-5-LANG-865",
+    "repo_id": "lang-5-bc255ccf",
+    "type": "bug_localization",
+    "query": "LocaleUtils.toLocale does not parse locale strings that start with an underscore.",
+    "bug_gold_ids": [
+      "org.apache.commons.lang3.LocaleUtils#toLocale(String)"
+    ],
+    "source": {
+      "dataset": "Defects4J 2.x Lang",
+      "bug_id": 5,
+      "issue": "LANG-865",
+      "buggy_revision": "bc255ccf5c239666ab54e5a31720d3f482ae78eb",
+      "fixed_revision": "4d46f014fb8ee44386feb5fec52509f35d0e36ea",
+      "fix_patch": "https://github.com/apache/commons-lang/commit/4d46f014fb8ee44386feb5fec52509f35d0e36ea.patch",
+      "label_basis": "The fix changes LocaleUtils.toLocale(String); method label manually reviewed against the patch."
+    }
+  },
+  {
+    "id": "defects4j-Lang-6-LANG-857",
+    "repo_id": "lang-6-f5a83bb9",
+    "type": "bug_localization",
+    "query": "CharSequenceTranslator throws StringIndexOutOfBoundsException while processing surrogate pairs.",
+    "bug_gold_ids": [
+      "org.apache.commons.lang3.text.translate.CharSequenceTranslator#translate(CharSequence,Writer)"
+    ],
+    "source": {
+      "dataset": "Defects4J 2.x Lang",
+      "bug_id": 6,
+      "issue": "LANG-857",
+      "buggy_revision": "f5a83bb90cf7b318ac72823e6b99d01d060abe41",
+      "fixed_revision": "52bcd9b8e82d4d1d287b0d75df1e161aff8c65ab",
+      "fix_patch": "https://github.com/apache/commons-lang/commit/52bcd9b8e82d4d1d287b0d75df1e161aff8c65ab.patch",
+      "label_basis": "The fix changes the position update in CharSequenceTranslator.translate(CharSequence,Writer); manually reviewed against the patch."
+    }
+  },
+  {
+    "id": "defects4j-Lang-8-LANG-818",
+    "repo_id": "lang-8-cfab1e4f",
+    "type": "bug_localization",
+    "query": "FastDateFormat's z pattern ignores the timezone of the Calendar passed to format.",
+    "bug_gold_ids": [
+      "org.apache.commons.lang3.time.FastDatePrinter.TimeZoneNameRule#appendTo(StringBuffer,Calendar)"
+    ],
+    "source": {
+      "dataset": "Defects4J 2.x Lang",
+      "bug_id": 8,
+      "issue": "LANG-818",
+      "buggy_revision": "cfab1e4fa19755d65de7b81206d86f9e98622d8e",
+      "fixed_revision": "04babff3798680e012646988841bcc710a9e3c54",
+      "fix_patch": "https://github.com/apache/commons-lang/commit/04babff3798680e012646988841bcc710a9e3c54.patch",
+      "label_basis": "The fix changes TimeZoneNameRule.appendTo(Calendar); method label manually reviewed against the patch."
+    }
+  }
+]

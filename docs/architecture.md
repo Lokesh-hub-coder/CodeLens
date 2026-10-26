@@ -59,12 +59,12 @@ JVM startup latency actually matters).
 1. `analyze_query()` classifies intent (bug / root-cause / feature-location
    / refactor / general) and extracts identifier-shaped anchor tokens from
    the raw query string.
-2. The query is embedded and searched against the repository's vector
-   store (FAISS or Chroma, whichever `VECTOR_DB_BACKEND` selects), which
+2. The query is embedded and searched against the repository's Qdrant
+   collection, which
    was populated with one vector per method at indexing time. This
    narrows the *whole* repository down to `top_k_candidates` (default 50)
    before the more expensive graph/symbol scoring runs.
-3. `prepare_candidates()` reads each candidate's exact source snippet
+3. `get_candidates()` reads each candidate's exact source snippet
    once and counts its tokens -- every later stage reuses this in-memory
    copy rather than touching disk again.
 4. `score_candidates()` computes the four-term composite score (semantic,
@@ -90,21 +90,18 @@ directly:
 
 | Simplification | Where | Upgrade path |
 |---|---|---|
-| Repository state (graphs, symbol index, vector store handle) lives in an in-memory dict keyed by `repo_id` | `api/routes.py` | Persist each `RepoIndex` under `INDEX_STORAGE_DIR` (pickle the graphs/symbol index; Chroma already persists vectors to disk) and lazily reload on lookup. Required before running more than one backend worker process. |
-| Parser is invoked as a fresh subprocess per index call (pays JVM startup cost every time) | `parsing/java_bridge.py` | Turn `parser-service` into a persistent process the backend talks to over a socket/stdin-stdout, or add a `--watch` mode that re-parses only changed files using `repo_walker.compute_repo_fingerprint()`. |
+| Repository registry is process-local, while graphs/symbol data are pickled and vectors persist in Qdrant | `api/routes.py`, `core/repo_index.py` | Use a shared registry/lock and deployment-wide Qdrant/index storage before running multiple backend workers. |
+| Live sync reparses the full Java repository after a debounced file event to preserve cross-file symbol resolution | `watcher/live_sync.py`, `parsing/java_bridge.py` | Replace with a parser that supports incremental updates only after preserving equivalent cross-file call and dependency resolution. |
 | Retrieval granularity is one chunk per method | `api/routes.py` indexing handler | Add class-level and file-level chunks for queries that are about a whole subsystem rather than one method; requires extending the vector store metadata schema and `prepare_candidates()`. |
 | Query intent classification is rule-based (keyword/regex) | `retrieval/query_understanding.py` | Once real usage logs exist, replace with a small trained classifier -- the `QueryAnalysis` return type does not need to change, only how `classify_intent()` computes its answer. |
-| Token counting uses `tiktoken`'s `cl100k_base` as a proxy for every provider | `acor/tokenizer.py` | Acceptable approximation (~15% typical variance across BPE tokenizers on source code) for ranking/budgeting purposes; get provider-exact counts from each API response's `usage` field (already captured in `LLMResponse`) if exact billing accounting is later required. |
+| ACOR context budgeting uses `tiktoken`'s `cl100k_base`; the rendered context (including file and method headers) is measured before it is returned | `acor/tokenizer.py`, `acor/ranker.py` | This is a strict budget for the formatted repository excerpt, not the full system/query prompt and not an exact count for every provider. Benchmark input-token counts use provider usage when returned. |
 | No authentication/multi-tenancy on the API | `api/main.py`, `api/routes.py` | Out of scope for a single-evaluator demo; would matter before any real deployment -- see the README section "Extra to think about" for the fuller list of production concerns the synopsis' scope doesn't require yet. |
 
-## Extending the ranker: pulling in structural context
+## Structural context and graph signals
 
 `CallGraph.neighbors_within_hops()` and the equivalent on
-`DependencyGraph` are provided but not yet wired into the ranker. A
-natural Week-11+ extension: once the top-N candidates by score are
-selected, also pull in short *signature-only* stubs (not full bodies) of
-each selected method's direct callers/callees, so the LLM sees the shape
-of the surrounding call chain even when the full body of a neighboring
-method didn't score high enough to earn its own budget slot. This is
-exactly the kind of ablation ("ACOR with vs. without neighbor stubs")
-that makes for a strong evaluation-chapter result.
+Call and dependency proximity are scored in ACOR. Directed reverse
+call-graph traversal is also used to seed change-impact candidates. The
+ranker does not yet add signature-only neighbor stubs. The evaluation
+harness holds the ACOR candidate set constant for score-signal ablations;
+the semantic-only baseline uses vector retrieval without graph expansion.

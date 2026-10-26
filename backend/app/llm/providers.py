@@ -25,6 +25,7 @@ class LLMResponse:
     latency_ms: float
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class LLMClient(ABC):
@@ -65,6 +66,7 @@ class _OpenAICompatibleClient(LLMClient):
             latency_ms=latency_ms,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
         )
 
 
@@ -104,6 +106,43 @@ class QwenClient(_OpenAICompatibleClient):
         )
 
 
+class GroqClient(LLMClient):
+    """Client for Groq cloud API using official groq SDK."""
+
+    def __init__(self, settings: Settings) -> None:
+        from groq import Groq
+        import os
+
+        api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY", "")
+        self._client = Groq(api_key=api_key)
+        self._model = settings.groq_model_name or settings.llm_model_name or "openai/gpt-oss-120b"
+        self._max_tokens = settings.llm_max_output_tokens
+        self._temperature = settings.llm_temperature
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
+        start = time.perf_counter()
+        completion = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+        )
+        latency_ms = (time.perf_counter() - start) * 1000
+
+        choice = completion.choices[0].message.content or ""
+        usage = getattr(completion, "usage", None)
+        return LLMResponse(
+            text=choice,
+            latency_ms=latency_ms,
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+        )
+
+
 class MockLLMClient(LLMClient):
     """Fallback client when no API key is configured or offline mode."""
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResponse:
@@ -111,13 +150,19 @@ class MockLLMClient(LLMClient):
         text = (
             "### CodeLens Analysis (Offline / Demo Mode)\n\n"
             "Relevant code context and call graph paths were successfully retrieved and ranked by ACOR.\n\n"
-            "*(To enable live natural-language synthesis with GPT/Llama/Qwen, set a valid `OPENAI_API_KEY` in `backend/.env`)*"
+            "*(To enable live natural-language synthesis with Groq/GPT/Llama/Qwen, set a valid API key in `backend/.env`)*"
         )
         latency_ms = (time.perf_counter() - start) * 1000
-        return LLMResponse(text=text, latency_ms=latency_ms, prompt_tokens=100, completion_tokens=50)
+        return LLMResponse(text=text, latency_ms=latency_ms)
 
 
 def get_llm_client(settings: Settings) -> LLMClient:
+    import os
+    if settings.llm_provider == "groq":
+        groq_key = settings.groq_api_key or os.getenv("GROQ_API_KEY", "")
+        if not groq_key:
+            return MockLLMClient()
+        return GroqClient(settings)
     if settings.llm_provider == "openai":
         if not settings.openai_api_key or "your_actual" in settings.openai_api_key or "placeholder" in settings.openai_api_key:
             return MockLLMClient()

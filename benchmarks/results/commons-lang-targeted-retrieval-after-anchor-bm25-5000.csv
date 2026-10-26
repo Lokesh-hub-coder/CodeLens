@@ -1,0 +1,6 @@
+task_id,candidate_count,gold_candidate_coverage,gold_method_rank,recall_at_10,reciprocal_rank,estimated_prompt_tokens,provider_input_tokens,retrieval_latency_ms
+defects4j-Lang-1-LANG-747,94,true,1,1,1.0,4376,,
+defects4j-Lang-3-LANG-693,98,true,1,1,1.0,4297,,
+defects4j-Lang-5-LANG-865,55,true,1,1,1.0,4565,,
+defects4j-Lang-6-LANG-857,64,true,4,1,0.25,4356,,
+defects4j-Lang-8-LANG-818,161,true,53,0,0.018867924528301886,3730,,

@@ -2,17 +2,10 @@
 Embedding generation for both repository chunks (at index time) and
 developer queries (at query time).
 
-Model choice matters more than it might look. A general-purpose sentence
-embedding model (e.g. all-MiniLM-L6-v2) is trained on natural-language
-similarity and treats code largely as unusual-looking text -- it will
-happily rank a comment-heavy, semantically-irrelevant method above a
-dense, correct one just because the comments share vocabulary with the
-query. The default here is a *code-aware* bi-encoder instead
-(flax-sentence-embeddings/st-codesearch-distilroberta-base, trained
-specifically for code search); swap EMBEDDING_MODEL in .env for any other
-sentence-transformers-compatible code model (e.g. a CodeBERT/UniXCoder/
-jina-embeddings-v2-base-code variant) without touching pipeline code
-elsewhere -- see docs/ACOR_algorithm.md, "Embedding model choice".
+FastEmbed generates normalized method and query vectors. The configured
+model defaults to BAAI/bge-small-en-v1.5; retrieval quality must be
+measured on labeled repository tasks rather than inferred from the model
+name.
 """
 from __future__ import annotations
 
@@ -26,23 +19,24 @@ from app.config import Settings
 
 @dataclass(frozen=True)
 class EmbeddingModel:
-    model: object  # sentence_transformers.SentenceTransformer, typed loosely to avoid a hard import at module load
+    model: object
     dim: int
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Returns an (N, dim) float32 array, L2-normalized so that a plain
-        dot product equals cosine similarity (both vector_store.py backends
-        rely on this)."""
+        dot product equals cosine similarity."""
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        vectors = self.model.encode(
-            texts,
-            batch_size=32,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        )
-        return vectors.astype(np.float32)
+        batch_size = 2
+        all_embeddings = []
+        for i in range(0, len(texts), batch_size):
+            chunk = texts[i : i + batch_size]
+            chunk_embeds = list(self.model.embed(chunk, batch_size=len(chunk)))
+            all_embeddings.extend(chunk_embeds)
+        arr = np.array(all_embeddings, dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return (arr / norms).astype(np.float32)
 
     def encode_one(self, text: str) -> np.ndarray:
         return self.encode([text])[0]
@@ -50,9 +44,9 @@ class EmbeddingModel:
 
 @lru_cache
 def _load_model(model_name: str, dim: int) -> EmbeddingModel:
-    from sentence_transformers import SentenceTransformer
+    from fastembed import TextEmbedding
 
-    model = SentenceTransformer(model_name)
+    model = TextEmbedding(model_name=model_name)
     return EmbeddingModel(model=model, dim=dim)
 
 
