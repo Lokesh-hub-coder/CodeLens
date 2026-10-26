@@ -187,3 +187,4 @@ from, but the short version, roughly in the order you'll hit it:
 
 
 
+backend\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
