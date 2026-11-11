@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { indexRepository, queryRepository } from "../api.js";
 
 export default function QueryPanel({ onResult }) {

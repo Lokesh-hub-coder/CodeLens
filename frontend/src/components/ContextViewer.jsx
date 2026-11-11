@@ -1,79 +1,59 @@
-const INTENT_LABELS = {
-  bug_explanation: "Bug explanation",
-  root_cause_analysis: "Root cause analysis",
-  feature_location: "Feature location",
-  refactoring: "Refactoring",
-  general_qa: "General Q&A",
-};
+import React from "react";
+import { SparklesIcon, LayersIcon, TerminalIcon, GitBranchIcon } from "./Icons.jsx";
+import AnswerView from "./AnswerView.jsx";
+import RetrievedContextList from "./RetrievedContextList.jsx";
 
-function BudgetMeter({ used, budget, naiveBaselineTokens }) {
-  const pct = Math.min(100, (used / budget) * 100);
-  const fillClass = pct > 95 ? "danger" : pct > 80 ? "warn" : "";
-  const savings =
-    naiveBaselineTokens && naiveBaselineTokens > used
-      ? Math.round((1 - used / naiveBaselineTokens) * 100)
-      : null;
+export default function ContextViewer({ result, isQuerying }) {
+  if (isQuerying) {
+    return (
+      <section className="dashboard-card empty-state-card querying-state">
+        <div className="empty-state-glow" />
+        <div className="state-spinner-large" />
+        <h3 className="empty-state-title">Traversing Repository Graph…</h3>
+        <p className="empty-state-desc">
+          Resolving semantic embeddings, computing ACOR composite scores across call
+          and dependency graphs, and packing context under token budget.
+        </p>
+      </section>
+    );
+  }
 
-  return (
-    <div className="budget-meter">
-      <div className="budget-meter-header">
-        <span className="used">{used.toLocaleString()} tokens used</span>
-        <span className="budget">budget: {budget.toLocaleString()}</span>
-      </div>
-      <div className="budget-meter-track">
-        <div className={`budget-meter-fill ${fillClass}`} style={{ width: `${pct}%` }} />
-      </div>
-      {savings !== null && savings > 0 && (
-        <div className="budget-meter-savings">
-          ~{savings}% fewer tokens than sending every candidate file whole (
-          {naiveBaselineTokens.toLocaleString()} tokens)
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function ContextViewer({ result }) {
   if (!result) {
     return (
-      <section className="panel">
-        <p className="empty-state">Index a repository and ask a question to see ACOR's picks here.</p>
+      <section className="dashboard-card empty-state-card">
+        <div className="empty-state-icon-box">
+          <SparklesIcon size={24} className="text-teal" />
+        </div>
+        <h3 className="empty-state-title">Ready for Repository Queries</h3>
+        <p className="empty-state-desc">
+          Index a Java repository above, then submit an architectural, bug-root-cause,
+          or call-chain question to inspect ACOR context ranking and AI synthesis.
+        </p>
+
+        <div className="workflow-steps-row">
+          <div className="workflow-step">
+            <span className="step-num">01</span>
+            <span className="step-label">AST &amp; Call Graph Parsing</span>
+          </div>
+          <div className="workflow-step-divider">→</div>
+          <div className="workflow-step">
+            <span className="step-num">02</span>
+            <span className="step-label">Dense FastEmbed Vectors</span>
+          </div>
+          <div className="workflow-step-divider">→</div>
+          <div className="workflow-step">
+            <span className="step-num">03</span>
+            <span className="step-label">ACOR Knapsack Packing</span>
+          </div>
+        </div>
       </section>
     );
   }
 
   return (
-    <>
-      <section className="panel">
-        <div className="panel-label">Answer</div>
-        <span className="intent-badge">{INTENT_LABELS[result.detected_intent] || result.detected_intent}</span>
-        <div className="answer-block">{result.answer}</div>
-        <BudgetMeter
-          used={result.total_context_tokens}
-          budget={result.token_budget}
-          naiveBaselineTokens={result.naive_baseline_tokens}
-        />
-        <p className="status-line">
-          {result.candidates_selected} of {result.candidates_considered} candidates selected · retrieval{" "}
-          {result.retrieval_latency_ms.toFixed(0)}ms · LLM {result.llm_latency_ms.toFixed(0)}ms
-        </p>
-      </section>
-
-      <section className="panel">
-        <div className="panel-label">Retrieved context ({result.retrieved_context.length} chunks)</div>
-        {result.retrieved_context.map((item) => (
-          <div className="context-item" key={`${item.file_path}:${item.start_line}`}>
-            <div className="context-item-header">
-              <span>
-                <span className="symbol-name">{item.symbol_name}</span> · {item.file_path}:{item.start_line}-
-                {item.end_line}
-              </span>
-              <span className="score">relevance {item.score.composite.toFixed(2)}</span>
-            </div>
-            <pre>{item.snippet}</pre>
-          </div>
-        ))}
-      </section>
-    </>
+    <div className="results-wrapper">
+      <AnswerView result={result} />
+      <RetrievedContextList items={result.retrieved_context} />
+    </div>
   );
 }
